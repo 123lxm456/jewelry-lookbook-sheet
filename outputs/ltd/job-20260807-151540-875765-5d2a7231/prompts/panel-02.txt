@@ -1,0 +1,11 @@
+Use case: product-mockup
+Asset type: vertical jewelry construction-detail panel
+Input images: Image 1 is the authoritative full jewelry reference; Image 2 is an optional authoritative detail reference and may repeat Image 1; Image 3 is style and layout reference only.
+Product identity: 项链, 1 visible item(s). A silver-tone necklace with a four-leaf clover pendant, featuring dense pave setting of clear crystals on the petals and a delicate chain.
+Primary request: Create an extreme close product photograph documenting the exact reference item's most distinctive construction and gemstone details. Close-up view highlighting the intricate pave crystal setting on each petal of the clover pendant and the fine link chain structure.
+Scene/backdrop: pale warm marble with sparse translucent cream accents confined to the outer corners.
+Style/medium: photorealistic high-end jewelry macro photography for a clear product detail page.
+Composition/framing: vertical 2:3; make the defining feature large and pin-sharp in the upper-middle while retaining enough adjoining structure to prove it is the same product; keep the lower area quiet for later typography.
+Lighting/mood: soft raking daylight with crisp micro-contrast, realistic gemstone scintillation, restrained shadows.
+Constraints: Maintain four-leaf clover shape; Keep silver-tone metal appearance; Preserve dense crystal pave texture; Retain delicate chain proportion. Do not change, simplify, symmetrize, add, or remove any visible jewelry element.
+Avoid: No additional gemstones; No colored metals like gold or rose gold; No extra charms or pendants; No visible branding or tags; extra inset images, callout circles, loose unrelated stones, additional jewelry, text, letters, logos, UI, watermark, blown highlights, shallow focus on the defining details.

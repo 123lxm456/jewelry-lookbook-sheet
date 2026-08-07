@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 - Jewelry Lookbook Sheet</title>
+    <style>
+      :root { color-scheme: light; font-family: system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f1ec; color: #28231f; }
+      main { width: min(92vw, 390px); padding: 32px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px #00000012; }
+      h1 { margin-top: 0; font-size: 24px; }
+      p { color: #716860; }
+      label { display: block; margin: 16px 0 6px; font-size: 14px; }
+      input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #d7cec5; border-radius: 8px; font-size: 16px; }
+      button { width: 100%; margin-top: 20px; padding: 12px; border: 0; border-radius: 8px; background: #29231f; color: #fff; font-size: 16px; cursor: pointer; }
+      .switch { margin-top: 16px; text-align: center; color: #766b62; cursor: pointer; }
+      .error { min-height: 1.4em; margin-top: 12px; color: #b42318; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">登录系统</h1>
+      <p id="subtitle">登录后使用珠宝商品图册生成工作台。</p>
+      <form id="authForm">
+        <label for="username">用户名</label>
+        <input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128">
+        <div id="error" class="error" role="alert"></div>
+        <button id="submit" type="submit">登录</button>
+      </form>
+      <div id="switch" class="switch">没有账号？注册</div>
+    </main>
+    <script>
+      const form = document.getElementById("authForm");
+      const title = document.getElementById("title");
+      const subtitle = document.getElementById("subtitle");
+      const submit = document.getElementById("submit");
+      const switchButton = document.getElementById("switch");
+      const error = document.getElementById("error");
+      let registerMode = false;
+
+      switchButton.onclick = () => {
+        registerMode = !registerMode;
+        title.textContent = registerMode ? "注册账号" : "登录系统";
+        subtitle.textContent = registerMode ? "注册后即可使用图片生成工作台。" : "登录后使用珠宝商品图册生成工作台。";
+        submit.textContent = registerMode ? "注册并登录" : "登录";
+        switchButton.textContent = registerMode ? "已有账号？登录" : "没有账号？注册";
+        document.getElementById("password").setAttribute("autocomplete", registerMode ? "new-password" : "current-password");
+        error.textContent = "";
+      };
+
+      form.onsubmit = async (event) => {
+        event.preventDefault();
+        error.textContent = "";
+        submit.disabled = true;
+        const body = new FormData(form);
+        try {
+          const response = await fetch(registerMode ? "/api/auth/register" : "/api/auth/login", {
+            method: "POST", body, credentials: "same-origin"
+          });
+          const raw = await response.text();
+          let data = {};
+          try { data = raw ? JSON.parse(raw) : {}; } catch { /* proxy may return non-JSON */ }
+          if (!response.ok) throw new Error(data.detail || raw || `操作失败（HTTP ${response.status}）`);
+          // A login starts a clean browser workspace.  Clear all client-side
+          // remnants before entering the authenticated application.
+          try {
+            for (const storage of [window.localStorage, window.sessionStorage]) {
+              for (let index = storage.length - 1; index >= 0; index -= 1) storage.removeItem(storage.key(index));
+            }
+            if (window.indexedDB) {
+              await new Promise((resolve) => {
+                const request = window.indexedDB.deleteDatabase("jewelry-workflow");
+                request.onsuccess = request.onerror = request.onblocked = resolve;
+              });
+            }
+          } catch { /* private browsing may deny storage access */ }
+          location.replace("/app?logged-in=" + Date.now());
+        } catch (exception) {
+          error.textContent = exception.message || "操作失败";
+          submit.disabled = false;
+        }
+      };
+    </script>
+  </body>
+</html>

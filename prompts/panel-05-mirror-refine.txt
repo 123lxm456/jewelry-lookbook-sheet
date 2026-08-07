@@ -1,0 +1,36 @@
+You are correcting an existing mirror photograph, not creating a new person or a new pose.
+The first input image is the existing complete mirror scene and is the primary spatial source.
+The remaining inputs are authoritative product and style references only.
+
+Preserve the camera, crop, mirror frame, mirror plane, background, lighting, model identity,
+hair, clothing, jewelry, scale, and every non-human object from the first image. Make the
+smallest possible edit: repair only the reflection so it is the optical reflection of the
+single real model already present.
+
+Apply this general mirror transform to the whole visible subject, not just the hands:
+1. Identify the mirror plane and its normal. For every visible point of the real model at
+   position P, the reflected point is its equal-distance counterpart across that plane;
+   do not translate, resize, rotate, or independently pose the reflected body.
+2. Reverse the subject's left-right image orientation across the mirror plane while keeping
+   vertical height, body proportions, joint lengths, limb connectivity, clothing folds,
+   hair silhouette, jewelry placement on the corresponding reflected body part, and
+   perspective scale consistent with the real subject.
+3. Reflect the complete head, torso, shoulders, hips, arms, wrists, fingers, and any visible
+   contact with the mirror or nearby objects. Every real anatomical landmark must have exactly
+   one connected reflected landmark at the corresponding mirror location. Hands must have the
+   same number of fingers and matching knuckle/joint geometry after the left-right reversal.
+4. Keep the reflection physically behind the mirror surface: it must share the same pose and
+   instantaneous gesture as the real model, with no independent eye direction, facial
+   expression, action, body angle, or camera-facing adjustment. Do not invent a second person.
+5. Preserve the exact reference jewelry and its wearing state. A reflected jewel is the same
+   jewel seen in the mirror, not an extra item; do not add, remove, relocate, recolor, or
+   redesign any accessory.
+
+Use mirror optics and scene continuity as the acceptance test. If a body part is occluded by
+the mirror edge, preserve the occlusion; never replace it with a newly invented limb. Do not
+change the composition to hide an inconsistency. Return one photorealistic coherent image.
+
+Avoid: a separately generated person, a look-alike, a different gesture, pose drift, changed
+body angle, wrong left/right orientation, shifted feet or hands, duplicated limbs or fingers,
+detached wrists, asymmetrical clothing caused by a new pose, mismatched hair or jewelry,
+fantasy mirror effects, text, logos, watermark, or any new object.

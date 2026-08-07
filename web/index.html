@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jewelry Lookbook Sheet</title>
+    <link rel="stylesheet" href="/app.css?v=20260807-2">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">J</span>
+        <div>
+          <strong>Jewelry Lookbook Sheet</strong>
+          <span>珠宝商品图册生成工作台</span>
+        </div>
+      </div>
+      <div class="service-state" aria-label="账户操作">
+        <span class="service-indicator" aria-hidden="true"></span>
+        <span class="user-label">当前用户</span>
+        <span id="currentUser" class="current-user">已登录</span>
+        <a id="logoutButton" class="logout-button" href="/logout" aria-label="退出登录" title="退出登录">
+          <i data-lucide="log-out" aria-hidden="true"></i>
+          <span>退出登录</span>
+        </a>
+      </div>
+    </header>
+
+    <main class="app-layout">
+      <aside class="control-pane">
+        <section class="control-section">
+          <div class="section-heading">
+            <div>
+              <span class="step-index">01</span>
+              <h1>商品图片</h1>
+            </div>
+            <button id="clearButton" class="icon-button" type="button" title="移除图片" hidden>
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+          <div id="dropZone" class="drop-zone" role="button" tabindex="0" aria-label="选择珠宝图片">
+            <div id="emptyUpload" class="upload-empty">
+              <i data-lucide="image-plus"></i>
+              <strong>选择珠宝图片</strong>
+              <span>JPEG、PNG 或 WebP · 最大 20 MB</span>
+            </div>
+            <img id="inputPreview" alt="上传的珠宝图片预览" hidden>
+            <button id="expandPreview" class="preview-expand" type="button" title="查看完整图片" hidden>
+              <i data-lucide="maximize-2"></i>
+            </button>
+          </div>
+          <div id="fileMeta" class="file-meta" hidden>
+            <span id="fileName"></span>
+            <span id="fileSize"></span>
+          </div>
+
+          <div id="errorMessage" class="error-message" role="alert" hidden></div>
+
+          <button id="generateButton" class="primary-button" type="button" disabled>
+            <i data-lucide="sparkles"></i>
+            <span>开始生成</span>
+          </button>
+        </section>
+
+        <section id="progressSection" class="progress-section" aria-live="polite" hidden>
+          <div class="section-heading compact">
+            <div>
+              <span class="step-index">02</span>
+              <h2>生成进度</h2>
+            </div>
+            <strong id="progressPercent" class="progress-percent">0%</strong>
+          </div>
+          <div class="progress-track"><span id="progressBar"></span></div>
+          <p id="stageText" class="stage-text">任务准备中</p>
+          <ol class="stage-list">
+            <li data-threshold="20"><span></span>珠宝视觉理解</li>
+            <li data-threshold="25"><span></span>商品信息与提示词</li>
+            <li data-threshold="80"><span></span>五张展示图</li>
+            <li data-threshold="100"><span></span>动态排版与长图合成</li>
+          </ol>
+        </section>
+      </aside>
+
+      <section class="result-pane">
+        <div class="result-toolbar">
+          <div>
+            <span class="step-index">03</span>
+            <h2>商品信息长图</h2>
+          </div>
+          <a id="downloadButton" class="secondary-button disabled" href="#" aria-disabled="true">
+            <i data-lucide="download"></i>
+            <span>下载长图</span>
+          </a>
+        </div>
+
+        <div id="resultViewport" class="result-viewport">
+          <div id="resultPlaceholder" class="result-placeholder">
+            <div class="placeholder-frame">
+              <i data-lucide="panels-top-left"></i>
+              <span>等待生成结果</span>
+            </div>
+          </div>
+          <div id="resultLoading" class="result-loading" hidden>
+            <span class="spinner"></span>
+            <strong>正在生成商品信息长图</strong>
+            <span id="loadingStage">任务准备中</span>
+          </div>
+          <img id="resultImage" class="result-image" alt="生成的珠宝商品信息长图" hidden>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="previewDialog" class="preview-dialog" aria-label="完整珠宝图片预览">
+      <button id="closePreview" class="dialog-close" type="button" title="关闭预览">
+        <i data-lucide="x"></i>
+      </button>
+      <img id="dialogImage" alt="完整珠宝图片预览">
+    </dialog>
+
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+    <script src="/app.js?v=20260807-1"></script>
+  </body>
+</html>

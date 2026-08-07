@@ -1,0 +1,93 @@
+{
+  "identity": {
+    "category": "项链",
+    "product_name": "花簇密镶吊坠项链",
+    "item_count": 1,
+    "wearing_location": "颈部",
+    "category_confidence": 0.99
+  },
+  "appearance": {
+    "main_stone": {
+      "visible_type": "透明无色宝石，具体材质无法仅凭图片确认",
+      "colors": ["无色透明"],
+      "count": {
+        "mode": "approximate",
+        "value": null,
+        "minimum": null,
+        "maximum": null,
+        "description": "多颗密镶，图片不足以可靠逐颗计数"
+      },
+      "shapes_or_cuts": ["小颗圆形切割外观"],
+      "settings": ["密镶外观"],
+      "confidence": 0.72,
+      "evidence": "吊坠表面可见多颗透明圆形亮点，但无法从图片验证宝石品种"
+    },
+    "accent_stones": [],
+    "gem_colors": ["无色透明"],
+    "setting_methods": ["密镶外观"],
+    "metal_color": "银白色",
+    "likely_metal": "银白色金属，具体材质未知",
+    "metal_confidence": 0.35
+  },
+  "design": {
+    "style_keywords": ["精致", "花卉", "轻盈", "浪漫"],
+    "motifs": ["双层花簇"],
+    "structure": "细椭圆链节连接单枚双层花形吊坠，外圈呈波浪花瓣轮廓，内层为四瓣花簇，两侧设连接环。",
+    "shape_and_proportion": "吊坠接近圆形，花簇为视觉中心，尺寸相对细链适中，整体比例轻盈。",
+    "visual_selling_points": ["双层花瓣层次", "细密闪光表面", "轻盈细链", "对称连接结构"]
+  },
+  "generation": {
+    "subject_description_en": "One silver-white fine-chain necklace with a single near-round two-tier floral pendant, a scalloped outer petal halo, an inner four-lobed cluster, dense colorless pave-like stones, and two side attachment rings.",
+    "wearing_instruction_en": "Wear the single necklace naturally at the base of the neck, with the complete chain and centered floral pendant clearly visible.",
+    "macro_focus_en": "Focus on the layered floral silhouette, scalloped outer halo, inner four-lobed cluster, dense small colorless stones, and the two side attachment rings.",
+    "gift_presentation_en": "Arrange the complete necklace naturally on a necklace insert, with the chain supported and the single floral pendant centered and unobstructed.",
+    "integrity_constraints_en": [
+      "preserve one necklace and one pendant only",
+      "preserve the fine oval-link chain and both side attachment rings",
+      "preserve the two-tier floral silhouette and its proportions",
+      "preserve the silver-white color and dense colorless stone appearance"
+    ],
+    "forbidden_additions_en": [
+      "no extra pendants or charms",
+      "no earrings, rings, bracelets, watches, or other accessories",
+      "no gold conversion or colored gemstones",
+      "no altered flower outline or attachment geometry"
+    ]
+  },
+  "copy": {
+    "sections": [
+      {
+        "eyebrow": "A QUIET RADIANCE",
+        "title": "轻盈花簇 点亮颈间",
+        "body": "细链自然贴合颈部\n双层花簇凝聚视线"
+      },
+      {
+        "eyebrow": "CRAFTED IN DETAIL",
+        "title": "层叠轮廓 细密闪耀",
+        "body": "花瓣与内层花簇层次清晰\n两侧连接结构精巧利落"
+      },
+      {
+        "eyebrow": "AFTERNOON POETRY",
+        "title": "把柔光留在午后",
+        "body": "暖调光影衬托银白质感\n细密亮点闪耀而克制"
+      },
+      {
+        "eyebrow": "A GIFT TO REMEMBER",
+        "title": "珍藏心意 礼遇如初",
+        "body": "完整项链安放于柔软礼盒\n自留赠礼皆具仪式感"
+      },
+      {
+        "eyebrow": "REFLECTION OF GRACE",
+        "title": "自在回望 光芒随行",
+        "body": "镜中映出同一抹花簇光泽\n举止之间自然流转"
+      }
+    ]
+  },
+  "schema_version": "1.0",
+  "source": {
+    "image_file": "necklace.jpg",
+    "image_sha256": "dbf4cf36228c7d5ebc000750e680fed5bc4049d30b617ea5b418982ea792f3f6",
+    "qwen_model": "example-offline-spec",
+    "analyzed_at": "2026-08-02T00:00:00Z"
+  }
+}
