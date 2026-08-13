@@ -1,0 +1,8 @@
+{
+  "id": "toys",
+  "label": "玩具",
+  "supported": true,
+  "strategy_id": "toy-five-panel-v1",
+  "aliases": ["玩具", "毛绒玩具", "玩偶", "公仔", "手办", "模型", "积木", "儿童玩具", "益智玩具", "遥控玩具", "toy", "toys", "plush", "doll", "figure", "model kit", "building blocks"],
+  "subcategories": ["毛绒玩具", "玩偶", "公仔", "手办", "模型", "积木", "儿童玩具", "益智玩具", "遥控玩具", "其他玩具"]
+}

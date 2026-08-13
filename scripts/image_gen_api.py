@@ -9,10 +9,43 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
+import os
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from openai import OpenAI
+
+
+@contextmanager
+def global_image_slot():
+    """Limit image requests across all workflow processes on this host."""
+    limit = int(os.environ.get("IMAGE2_GLOBAL_PARALLELISM", "5"))
+    if not 1 <= limit <= 64:
+        fail("IMAGE2_GLOBAL_PARALLELISM must be between 1 and 64")
+    lock_root = Path(os.environ.get("IMAGE2_GLOBAL_LIMIT_DIR", "/tmp/jewelry-lookbook-image-slots"))
+    lock_root.mkdir(parents=True, exist_ok=True)
+    handles = [open(lock_root / f"slot-{index:02d}.lock", "a+b") for index in range(limit)]
+    acquired = None
+    try:
+        while acquired is None:
+            for handle in handles:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = handle
+                    break
+                except BlockingIOError:
+                    continue
+            if acquired is None:
+                time.sleep(0.1)
+        yield
+    finally:
+        if acquired is not None:
+            fcntl.flock(acquired.fileno(), fcntl.LOCK_UN)
+        for handle in handles:
+            handle.close()
 
 
 def fail(message: str) -> None:
@@ -55,7 +88,7 @@ def run_edit(args: argparse.Namespace) -> None:
         print(f"Dry run: edit {len(image_paths)} image(s) -> {args.out}")
         return
 
-    if not __import__("os").environ.get("OPENAI_API_KEY"):
+    if not os.environ.get("OPENAI_API_KEY"):
         fail("OPENAI_API_KEY is not set; configure IMAGE2_API_KEY in .env")
 
     request = {
@@ -74,7 +107,8 @@ def run_edit(args: argparse.Namespace) -> None:
             request["image"].append(handle)
         if len(request["image"]) == 1:
             request["image"] = request["image"][0]
-        result = OpenAI().images.edit(**request)
+        with global_image_slot():
+            result = OpenAI().images.edit(**request)
     except Exception as exc:
         fail(str(exc))
     finally:
@@ -83,9 +117,12 @@ def run_edit(args: argparse.Namespace) -> None:
 
     if not result.data or not getattr(result.data[0], "b64_json", None):
         fail("Image API returned no base64 image data")
+    temporary = args.out.with_suffix(args.out.suffix + f".{os.getpid()}.tmp")
     try:
-        args.out.write_bytes(base64.b64decode(result.data[0].b64_json))
+        temporary.write_bytes(base64.b64decode(result.data[0].b64_json))
+        temporary.replace(args.out)
     except Exception as exc:
+        temporary.unlink(missing_ok=True)
         fail(f"Unable to save generated image: {exc}")
     print(f"Saved image: {args.out}")
 

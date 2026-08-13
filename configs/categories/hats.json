@@ -1,0 +1,8 @@
+{
+  "id": "hats",
+  "label": "帽类",
+  "supported": true,
+  "strategy_id": "hat-five-panel-v1",
+  "aliases": ["帽", "帽子", "hat", "cap", "headwear"],
+  "subcategories": ["棒球帽", "礼帽", "遮阳帽", "毛帽", "针织帽", "其他帽类"]
+}

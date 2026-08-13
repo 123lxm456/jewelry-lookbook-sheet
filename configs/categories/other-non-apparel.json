@@ -1,0 +1,8 @@
+{
+  "id": "other_non_apparel",
+  "label": "其他非服装商品",
+  "supported": true,
+  "strategy_id": "generic-five-panel-v1",
+  "aliases": ["其他商品", "其他非服装", "other", "other non-apparel"],
+  "subcategories": ["其他非服装商品"]
+}

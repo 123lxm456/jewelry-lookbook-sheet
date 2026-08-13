@@ -56,10 +56,28 @@ def crop_bounds(image: Image.Image) -> tuple[int, int, str]:
     return round(image.height * 0.275), round(image.height * 0.935), "percentage fallback"
 
 
+def panel_bounds(image: Image.Image) -> list[tuple[int, int]]:
+    """Return the five content regions in a five-panel style long image."""
+    bands = near_white_runs(image)
+    if (
+        len(bands) >= 6
+        and bands[0][0] <= round(image.height * 0.08)
+        and bands[-1][0] >= round(image.height * 0.95)
+    ):
+        regions = [
+            (bands[index][1] + 1, bands[index + 1][0])
+            for index in range(5)
+        ]
+        if all(bottom - top >= round(image.height * 0.12) for top, bottom in regions):
+            return regions
+    return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Crop the ad-only section from the style screenshot.")
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--panels-dir", type=Path)
     args = parser.parse_args()
 
     with Image.open(args.source) as image:
@@ -69,6 +87,15 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         crop.save(args.output, quality=94, subsampling=0)
         print(f"Saved style crop: {args.output} ({crop.width}x{crop.height}; {method}; y={top}:{bottom})")
+        if args.panels_dir:
+            regions = panel_bounds(image)
+            if regions:
+                args.panels_dir.mkdir(parents=True, exist_ok=True)
+                for index, (panel_top, panel_bottom) in enumerate(regions, start=1):
+                    panel = image.crop((0, panel_top, width, panel_bottom)).convert("RGB")
+                    panel_path = args.panels_dir / f"panel-{index:02d}.jpg"
+                    panel.save(panel_path, quality=94, subsampling=0)
+                print(f"Saved {len(regions)} panel-specific style references: {args.panels_dir}")
 
 
 if __name__ == "__main__":

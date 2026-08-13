@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>管理后台 · 商品视觉系统</title>
+  <link rel="stylesheet" href="/admin.css?v=20260813">
+</head>
+<body>
+  <div class="admin-shell">
+    <aside class="admin-sidebar">
+      <div class="admin-brand"><span>DF</span><div><strong>商品视觉后台</strong><small>ADMIN CONSOLE</small></div></div>
+      <nav>
+        <a href="/admin" data-route="home">数据概览</a>
+        <a href="/admin/users" data-route="users">用户管理</a>
+        <a href="/admin/jobs" data-route="jobs">生成记录</a>
+        <a href="/admin/payments" data-route="payments">充值记录</a>
+      </nav>
+      <div class="sidebar-account"><span>当前管理员</span><strong id="adminName">—</strong><button id="logoutButton">退出登录</button></div>
+    </aside>
+    <main class="admin-main">
+      <header><div><p>DEEDFACE / 管理后台</p><h1 id="pageTitle">数据概览</h1></div><span class="read-only">只读模式</span></header>
+      <section id="adminContent" aria-live="polite"><div class="loading">正在加载数据…</div></section>
+    </main>
+  </div>
+  <dialog id="detailDialog" class="detail-dialog"><button class="dialog-close" aria-label="关闭">×</button><div id="detailContent"></div></dialog>
+  <dialog id="imageDialog" class="image-dialog"><button class="dialog-close" aria-label="关闭">×</button><img id="previewImage" alt="生成图片预览"></dialog>
+  <script src="/admin.js?v=20260813" defer></script>
+</body>
+</html>

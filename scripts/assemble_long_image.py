@@ -5,13 +5,14 @@ import argparse
 import itertools
 import json
 import random
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageStat
 
 WIDTH = 1256
-TITLE_HEIGHT = 172
+TITLE_HEIGHT = 0
 SERIF = "/usr/share/fonts/opentype/arphic/uming.ttc"
 SANS = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
 REGULAR = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
@@ -89,13 +90,20 @@ def build_risk_map(image: Image.Image) -> Image.Image:
     risk = ImageChops.add(risk, bright, scale=1.35)
     risk = ImageChops.add(risk, saturation.point(lambda value: value // 3), scale=1.15)
     red, green, blue = sample.split()
-    # Broad skin-tone heuristic, deliberately inclusive so it also protects
-    # hands and facial features under warm editorial lighting.
+    luminance, cb_channel, cr_channel = sample.convert("YCbCr").split()
+    # Protect faces and hands without classifying warm ivory, wood, leather,
+    # or champagne backdrops as skin. YCbCr chroma bounds are more stable under
+    # editorial lighting than a broad RGB warmth test.
     skin = Image.new("L", sample.size)
     skin_pixels = []
-    for r, g, b in zip(red.get_flattened_data(), green.get_flattened_data(), blue.get_flattened_data()):
-        warm = r > 70 and r > g * 1.05 and g > b * 1.08 and (r - b) > 18
-        skin_pixels.append(220 if warm else 0)
+    channels = zip(
+        red.get_flattened_data(), green.get_flattened_data(), blue.get_flattened_data(),
+        luminance.get_flattened_data(), cb_channel.get_flattened_data(), cr_channel.get_flattened_data(),
+    )
+    for r, g, b, y, cb, cr in channels:
+        chroma_skin = 35 < y < 246 and 78 <= cb <= 126 and 134 <= cr <= 172
+        rgb_skin = r > g > b and 7 <= r - g <= 62 and 4 <= g - b <= 58
+        skin_pixels.append(190 if chroma_skin and rgb_skin else 0)
     skin.putdata(skin_pixels)
     skin = skin.filter(ImageFilter.MaxFilter(13)).filter(ImageFilter.GaussianBlur(4.0))
     risk = ImageChops.lighter(risk, skin)
@@ -165,9 +173,13 @@ def wrap_boxes(image: Image.Image, placement: Placement) -> tuple[tuple[int, int
     return (58, top_y, 548, top_y + 230), (700, bottom_y, 1198, bottom_y + 188)
 
 
-def semantic_safe_zone(index: int, image: Image.Image) -> tuple[int, int, int, int]:
+def semantic_safe_zone(
+    index: int,
+    image: Image.Image,
+    configured_zones: list[list[float]] | None = None,
+) -> tuple[int, int, int, int]:
     """Safe typography zones already requested when each source panel is generated."""
-    zones = (
+    zones = configured_zones or (
         (0.00, 0.06, 0.48, 0.94),  # worn product: calm left side
         (0.04, 0.62, 0.96, 0.96),  # macro: quiet lower area
         (0.55, 0.04, 0.96, 0.46),  # still life: clean upper-right
@@ -188,23 +200,42 @@ def outside_fraction(box: tuple[int, int, int, int], zone: tuple[int, int, int, 
     return 1 - overlap / area
 
 
-def safe_zone_penalty(image: Image.Image, index: int, layout: str, placement: Placement) -> float:
-    zone = semantic_safe_zone(index, image)
+def safe_zone_penalty(
+    image: Image.Image,
+    index: int,
+    layout: str,
+    placement: Placement,
+    configured_zones: list[list[float]] | None = None,
+) -> float:
+    zone = semantic_safe_zone(index, image, configured_zones)
     boxes = wrap_boxes(image, placement) if layout == "wrap_around" else (placement.box,)
     # Generated prompts provide a semantic quiet area, so leaving it should be
     # substantially more expensive than choosing a different layout variant.
-    return sum(outside_fraction(box, zone) for box in boxes) / len(boxes) * 620
+    return sum(outside_fraction(box, zone) for box in boxes) / len(boxes) * 260
 
 
-def choose_layouts(images: list[Image.Image], rng: random.Random) -> list[tuple[str, Placement, float, float]]:
-    risk_maps = [build_risk_map(image) for image in images]
+def choose_layouts(
+    images: list[Image.Image],
+    rng: random.Random,
+    configured_zones: list[list[float]] | None = None,
+    prepared_risk_maps: list[Image.Image] | None = None,
+) -> list[tuple[str, Placement, float, float]]:
+    # Detection/risk analysis is independent per panel. Threads work well here
+    # because Pillow's resize/filter primitives release the GIL.
+    if prepared_risk_maps is None:
+        with ThreadPoolExecutor(max_workers=min(len(images), 5)) as executor:
+            risk_maps = list(executor.map(build_risk_map, images))
+    else:
+        if len(prepared_risk_maps) != len(images):
+            raise ValueError("prepared risk-map count must match image count")
+        risk_maps = prepared_risk_maps
     best: dict[tuple[int, str], tuple[Placement, float, float]] = {}
     for image_index, (image, risk_map) in enumerate(zip(images, risk_maps)):
         for layout in LAYOUT_NAMES:
             options = []
             for item in candidates(layout, image.height):
                 content_risk = placement_risk(image, risk_map, layout, item)
-                score = content_risk + safe_zone_penalty(image, image_index, layout, item)
+                score = content_risk + safe_zone_penalty(image, image_index, layout, item, configured_zones)
                 options.append((score, content_risk, item))
             score, content_risk, placement = min(options, key=lambda option: option[0])
             best[(image_index, layout)] = (placement, score, content_risk)
@@ -301,10 +332,7 @@ def draw_vertical_copy(
 def choose_decoration(layout: str, content_risk: float, rng: random.Random) -> str:
     if layout in {"minimal_whitespace", "wrap_around"}:
         return "none"
-    options = ["none", "line"]
-    if content_risk < 135:
-        options.append("tint")
-    return rng.choice(options)
+    return rng.choice(["none", "line"])
 
 
 def render_layout(
@@ -319,24 +347,15 @@ def render_layout(
     color, contrast = palette(image, placement.box)
 
     if layout == "left_sidebar":
-        fill = (25, 22, 20, 128) if color[0] > 200 else (247, 241, 232, 150)
-        if decoration == "tint":
-            draw.rectangle((0, placement.y - 24, placement.x + placement.width, placement.y + placement.height + 24), fill=fill)
         if decoration != "none":
             draw.line((placement.x + placement.width - 2, placement.y, placement.x + placement.width - 2, placement.y + placement.height), fill=contrast, width=2)
         draw_standard_copy(draw, section, placement, color)
     elif layout == "right_sidebar":
-        fill = (250, 246, 239, 160) if color[0] < 100 else (26, 23, 22, 138)
-        if decoration == "tint":
-            draw.rectangle((placement.x - 24, placement.y - 18, WIDTH, placement.y + placement.height + 18), fill=fill)
         if decoration != "none":
             draw.line((placement.x, placement.y, placement.x, placement.y + placement.height), fill=contrast, width=2)
         draw_standard_copy(draw, section, placement, color)
     elif layout in VERTICAL_LAYOUTS:
         align = "left" if layout == "vertical_left" else "right"
-        if decoration == "tint":
-            fill = (250, 246, 238, 126) if color[0] < 100 else (24, 21, 20, 112)
-            draw.rectangle(placement.box, fill=fill)
         if decoration != "none":
             line_x = placement.x + placement.width if align == "left" else placement.x
             draw.line((line_x, placement.y, line_x, placement.y + placement.height), fill=contrast, width=2)
@@ -344,17 +363,12 @@ def render_layout(
     elif layout == "top_heading":
         eyebrow_font, title_font, body_font = copy_fonts(section, placement.width - 40, 60)
         center_x = placement.x + placement.width // 2
-        if decoration == "tint":
-            draw.rectangle((placement.x - 24, 0, placement.x + placement.width + 24, placement.y + placement.height), fill=(250, 246, 239, 116))
         draw.text((center_x, placement.y + 20), section["eyebrow"], anchor="ma", font=eyebrow_font, fill=color)
         draw.text((center_x, placement.y + 72), section["title"], anchor="ma", font=title_font, fill=color)
         draw.multiline_text((placement.x + placement.width - 12, placement.y + 158), section["body"], anchor="ra", align="right", font=body_font, fill=color, spacing=10)
         if decoration != "none":
             draw.line((placement.x + placement.width // 3, placement.y + 146, placement.x + placement.width * 2 // 3, placement.y + 146), fill=color, width=1)
     elif layout == "bottom_description":
-        fill = (18, 16, 15, 112) if color[0] > 200 else (250, 246, 238, 132)
-        if decoration == "tint":
-            draw.rectangle((placement.x - 24, placement.y - 12, placement.x + placement.width + 20, image.height), fill=fill)
         eyebrow_font, title_font, body_font = copy_fonts(section, placement.width - 44, 48)
         draw.text((placement.x + placement.width - 22, placement.y + 18), section["eyebrow"], anchor="ra", font=eyebrow_font, fill=color)
         draw.text((placement.x + placement.width - 22, placement.y + 66), section["title"], anchor="ra", font=title_font, fill=color)
@@ -368,9 +382,6 @@ def render_layout(
         draw_standard_copy(draw, section, shifted, shadow)
         draw_standard_copy(draw, section, placement, color)
     elif layout == "magazine_editorial":
-        if decoration == "tint":
-            fill = (247, 241, 233, 125) if color[0] < 100 else (25, 22, 20, 108)
-            draw.rectangle(placement.box, fill=fill)
         draw.line((placement.x, placement.y, placement.x + placement.width, placement.y), fill=color, width=3)
         draw.line((placement.x, placement.y + 54, placement.x + 145, placement.y + 54), fill=color, width=1)
         eyebrow_font, title_font, body_font = copy_fonts(section, placement.width - 28, 64)
@@ -393,65 +404,94 @@ def render_layout(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render five adaptively typeset jewelry panels into one product image.")
+    parser = argparse.ArgumentParser(description="Render strategy-driven product panels into one adaptively typeset image.")
     parser.add_argument("panel_dir", type=Path)
     parser.add_argument("page", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--display-plan", type=Path)
+    parser.add_argument("--prepared-dir", type=Path)
     parser.add_argument("--seed", type=int, help="Optional deterministic seed for tests and reproducible exports.")
     args = parser.parse_args()
 
     data = json.loads(args.page.read_text(encoding="utf-8"))
-    if not isinstance(data.get("sections"), list) or len(data["sections"]) != 5:
-        raise SystemExit("page JSON must contain exactly five sections")
-    paths = [args.panel_dir / f"panel-{number:02d}.png" for number in range(1, 6)]
+    plan = json.loads(args.display_plan.read_text(encoding="utf-8")) if args.display_plan else None
+    panels = plan["panels"] if plan else [
+        {"number": index + 1, "id": f"panel-{index + 1}", "label": f"Panel {index + 1}",
+         "safe_zone": zone, "crop_height": height, "focus_y": focus}
+        for index, (zone, height, focus) in enumerate(zip(
+            ([0.00, 0.06, 0.48, 0.94], [0.04, 0.62, 0.96, 0.96], [0.55, 0.04, 0.96, 0.46],
+             [0.04, 0.04, 0.48, 0.46], [0.52, 0.68, 0.96, 0.94]),
+            (1460, 1520, 1640, 1500, 1560), (0.42, 0.38, 0.72, 0.50, 0.42),
+        ))
+    ]
+    if not isinstance(data.get("sections"), list) or len(data["sections"]) != len(panels):
+        raise SystemExit("page section count must match the display plan")
+    paths = [args.panel_dir / f"panel-{int(panel['number']):02d}.png" for panel in panels]
     missing = [str(path) for path in paths if not path.exists()]
     if missing:
         raise SystemExit("Missing generated images: " + ", ".join(missing))
 
     panel_specs = [
-        # Keep most of each 2:3 source frame. The still-life product is composed
-        # in the lower half, so it receives extra height and a lower crop focus.
-        (paths[0], 1460, 0.42),
-        (paths[1], 1520, 0.38),
-        (paths[2], 1640, 0.72),
-        (paths[3], 1500, 0.50),
-        (paths[4], 1560, 0.42),
+        (path, int(panel["crop_height"]), float(panel["focus_y"]))
+        for path, panel in zip(paths, panels)
     ]
-    images = [cover(path, WIDTH, height, focus_y) for path, height, focus_y in panel_specs]
+    prepared_images = [args.prepared_dir / f"panel-{int(panel['number']):02d}.ppm" for panel in panels] if args.prepared_dir else []
+    prepared_risks = [args.prepared_dir / f"risk-{int(panel['number']):02d}.png" for panel in panels] if args.prepared_dir else []
+    if prepared_images and all(path.is_file() for path in (*prepared_images, *prepared_risks)):
+        images = []
+        risk_maps = []
+        for image_path, risk_path in zip(prepared_images, prepared_risks):
+            with Image.open(image_path) as opened:
+                images.append(opened.convert("RGB"))
+            with Image.open(risk_path) as opened:
+                risk_maps.append(opened.convert("L"))
+    else:
+        images = [cover(path, WIDTH, height, focus_y) for path, height, focus_y in panel_specs]
+        risk_maps = None
     rng = random.Random(args.seed) if args.seed is not None else random.SystemRandom()
-    choices = choose_layouts(images, rng)
+    choices = choose_layouts(images, rng, [panel["safe_zone"] for panel in panels], risk_maps)
 
-    height = TITLE_HEIGHT + sum(image.height for image in images)
+    rendered_panels: list[tuple[Image.Image, str]] = []
+    for image, section, choice in zip(images, data["sections"], choices):
+        layout, placement, _, content_risk = choice
+        # Typography is always drawn directly over the photograph. Never add a
+        # translucent rectangle/card behind copy, even in a busy safe zone.
+        decoration = choose_decoration(layout, content_risk, rng)
+        rendered_panels.append((render_layout(image, section, layout, placement, decoration), decoration))
+
+    height = TITLE_HEIGHT + sum(panel.height for panel, _ in rendered_panels)
     canvas = Image.new("RGB", (WIDTH, height), "#f2f2f2")
     draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.rounded_rectangle((28, 0, WIDTH - 28, TITLE_HEIGHT - 18), radius=8, fill="#ffffff")
-    title_font = font(REGULAR, 36)
-    title = "商品信息"
-    title_width = draw.textlength(title, font=title_font)
-    draw.text(((WIDTH - title_width) / 2, 53), title, font=title_font, fill="#777777")
 
     layout_plan = []
     y = TITLE_HEIGHT
-    for index, (image, section, choice) in enumerate(zip(images, data["sections"], choices), start=1):
+    for index, (image, section, choice, panel_spec, rendered) in enumerate(zip(images, data["sections"], choices, panels, rendered_panels), start=1):
         layout, placement, selection_score, content_risk = choice
-        decoration = choose_decoration(layout, content_risk, rng)
-        canvas.paste(render_layout(image, section, layout, placement, decoration), (0, y))
+        rendered_image, decoration = rendered
+        canvas.paste(rendered_image, (0, y))
         draw.rectangle((0, y, WIDTH, y + 8), fill="#fffaf5")
         layout_plan.append({
             "panel": index,
+            "panel_id": panel_spec["id"],
+            "label": panel_spec["label"],
             "layout": layout,
             "decoration": decoration,
+            "safety_mode": "in_image_semantic_risk_optimized",
             "placement": {"x": placement.x, "y": placement.y, "width": placement.width, "height": placement.height},
             "content_risk": round(content_risk, 2),
             "selection_score": round(selection_score, 2),
         })
-        y += image.height
+        y += rendered_image.height
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(args.output, quality=95, subsampling=0)
+    temporary_output = args.output.with_suffix(args.output.suffix + ".tmp")
+    canvas.save(temporary_output, format="PNG", quality=95, subsampling=0)
+    temporary_output.replace(args.output)
     plan_path = args.output.with_name(f"{args.output.stem}-layout.json")
-    plan_path.write_text(json.dumps({"panels": layout_plan}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Saved jewelry details: {args.output} ({canvas.width}x{canvas.height})")
+    temporary_plan = plan_path.with_suffix(plan_path.suffix + ".tmp")
+    temporary_plan.write_text(json.dumps({"panels": layout_plan}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_plan.replace(plan_path)
+    print(f"Saved product details: {args.output} ({canvas.width}x{canvas.height})")
     print(f"Saved adaptive layout plan: {plan_path}")
 
 

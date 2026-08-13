@@ -20,29 +20,57 @@ const loadingStage = document.getElementById("loadingStage");
 const stageItems = [...document.querySelectorAll(".stage-list li")];
 const resultPlaceholder = document.getElementById("resultPlaceholder");
 const resultLoading = document.getElementById("resultLoading");
+const resultGallery = document.getElementById("resultGallery");
+const displayImageGrid = document.getElementById("displayImageGrid");
 const resultImage = document.getElementById("resultImage");
 const downloadButton = document.getElementById("downloadButton");
+const saveDialog = document.getElementById("saveDialog");
+const saveImage = document.getElementById("saveImage");
+const closeSaveDialog = document.getElementById("closeSaveDialog");
 const currentUser = document.getElementById("currentUser");
-const logoutButton = document.getElementById("logoutButton");
+const mobileCurrentUser = document.getElementById("mobileCurrentUser");
+const logoutButtons = [...document.querySelectorAll("[data-logout]")];
+const balanceBadge = document.getElementById("balanceBadge");
+const mobileBalanceBadge = document.getElementById("mobileBalanceBadge");
+const rechargeDialog = document.getElementById("rechargeDialog");
+const closeRechargeDialog = document.getElementById("closeRechargeDialog");
 
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const maxBytes = 20 * 1024 * 1024;
-const currentJobStorageKey = "jewelry.currentJobId";
-const draftDatabaseName = "jewelry-workflow";
+const currentJobStorageKey = "product-visual.currentJobId";
+const draftDatabaseName = "product-visual-workflow";
 const draftStoreName = "uploads";
 let selectedFile = null;
 let previewUrl = null;
 let eventSource = null;
 let currentUserId = null;
+let currentResultData = null;
+let paymentRequired = true;
+let currentServiceStatus = "unpaid";
+let remainingUses = 0;
 
 async function initializeSession() {
-  const response = await fetch("/api/session", { cache: "no-store" });
+  const response = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+  if (response.status === 401) {
+    location.replace("/?next=%2Fapp");
+    throw new Error("登录状态已过期，正在重新登录");
+  }
   if (!response.ok) throw new Error("无法初始化前端会话");
   const data = await response.json();
   if (!data.session_id) throw new Error("前端会话标识无效");
   if (!data.user_id) throw new Error("当前用户标识无效");
+  paymentRequired = Boolean(data.payment_required);
+  currentServiceStatus = data.service_status || "unpaid";
+  remainingUses = Number(data.remaining_uses) || 0;
+  const balanceText = `余额 ¥${(Number(data.balance_cent || 0) / 100).toFixed(2)} · ${remainingUses} 次`;
+  if (balanceBadge) balanceBadge.textContent = balanceText;
+  if (mobileBalanceBadge) mobileBalanceBadge.textContent = balanceText;
   currentUserId = String(data.user_id);
-  if (currentUser && data.username) currentUser.textContent = data.username;
+  if (data.service_job_id) {
+    try { window.sessionStorage.setItem(currentJobStorageKey, data.service_job_id); } catch { /* ignore */ }
+  }
+  if (currentUser && data.openid_masked) currentUser.textContent = data.openid_masked;
+  if (mobileCurrentUser && data.openid_masked) mobileCurrentUser.textContent = data.openid_masked;
 }
 
 function refreshIcons() {
@@ -62,6 +90,24 @@ function showError(message) {
 function clearError() {
   errorMessage.hidden = true;
   errorMessage.textContent = "";
+}
+
+function showRechargeDialog() {
+  if (rechargeDialog && !rechargeDialog.open) rechargeDialog.showModal();
+}
+
+async function hasAvailableUse() {
+  if (!paymentRequired) return true;
+  const response = await fetch("/api/account", { cache: "no-store", credentials: "same-origin" });
+  if (response.status === 401) { location.replace("/?next=%2Fapp"); return false; }
+  if (!response.ok) throw new Error("无法查询账户余额，请稍后重试");
+  const data = await response.json();
+  remainingUses = Number(data.remaining_uses) || 0;
+  const balanceText = `余额 ¥${(Number(data.balance_cent || 0) / 100).toFixed(2)} · ${remainingUses} 次`;
+  if (balanceBadge) balanceBadge.textContent = balanceText;
+  if (mobileBalanceBadge) mobileBalanceBadge.textContent = balanceText;
+  if (remainingUses < 1) showRechargeDialog();
+  return remainingUses > 0;
 }
 
 function updatePreviewLayout() {
@@ -137,7 +183,7 @@ async function loadDraft() {
     });
     database.close();
     if (!value?.blob) return null;
-    return new File([value.blob], value.name || "uploaded-jewelry-image", { type: value.type || value.blob.type });
+    return new File([value.blob], value.name || "uploaded-product-image", { type: value.type || value.blob.type });
   } catch { return null; }
 }
 
@@ -223,8 +269,10 @@ function updateProgress(data) {
 }
 
 function prepareResultState() {
+  currentResultData = null;
   resultPlaceholder.hidden = true;
-  resultImage.hidden = true;
+  resultGallery.hidden = true;
+  displayImageGrid.replaceChildren();
   resultImage.removeAttribute("src");
   resultLoading.hidden = false;
   downloadButton.classList.add("disabled");
@@ -234,14 +282,106 @@ function prepareResultState() {
 }
 
 function showResult(data) {
+  currentResultData = data;
   resultLoading.hidden = true;
-  resultImage.src = `${data.result_url}?v=${Date.now()}`;
-  resultImage.hidden = false;
+  const images = Array.isArray(data.images) ? data.images : [];
+  const displayImages = images.filter((image) => image.type === "display");
+  const finalImage = images.find((image) => image.type === "final");
+  displayImageGrid.replaceChildren(...displayImages.map((image, index) => {
+    const figure = document.createElement("figure");
+    figure.className = "display-image-card";
+    const preview = document.createElement("a");
+    preview.href = image.url;
+    preview.target = "_blank";
+    preview.rel = "noopener";
+    const img = document.createElement("img");
+    img.src = `${image.url}?v=${Date.now()}`;
+    img.alt = image.label || `商品展示图_${String(index + 1).padStart(2, "0")}`;
+    img.loading = index < 2 ? "eager" : "lazy";
+    const caption = document.createElement("figcaption");
+    caption.textContent = image.label || `商品展示图_${String(index + 1).padStart(2, "0")}`;
+    preview.append(img);
+    figure.append(preview, caption);
+    return figure;
+  }));
+  resultImage.src = `${finalImage?.url || data.result_url}?v=${Date.now()}`;
+  resultGallery.hidden = false;
+  resultImage.addEventListener("load", () => {
+    // Let the document own vertical scrolling on mobile/WebView. This avoids
+    // a nested overflow region swallowing WeChat touch gestures.
+    if (window.innerWidth <= 820) resultImage.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, { once: true });
   downloadButton.href = data.download_url;
   downloadButton.setAttribute("download", "");
   downloadButton.classList.remove("disabled");
   downloadButton.setAttribute("aria-disabled", "false");
+  window.ProductZipDownload.prepare(
+    data.download_url,
+    data.download_transfer_url,
+    data.download_transfer_expires_in,
+  ).catch(() => {});
+  const label = generateButton.querySelector("span");
+  if (label) label.textContent = "重新生成";
   setBusy(false);
+  remainingUses = Math.max(0, remainingUses - 1);
+  // Completion only refreshes the account badge. An exhausted balance must
+  // not interrupt a result the user has just paid for; the next explicit
+  // image-selection action is the only place that opens the recharge dialog.
+  initializeSession().catch(() => {});
+}
+
+function isMobileSaveContext() {
+  return window.matchMedia("(pointer: coarse)").matches ||
+    /MicroMessenger|Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+function openSaveDialog() {
+  if (!currentResultData?.result_url) return;
+  saveImage.src = `${currentResultData.result_url}?save=${Date.now()}`;
+  if (!saveDialog.open) saveDialog.showModal();
+}
+
+function closePhoneSaveDialog() {
+  if (saveDialog.open) saveDialog.close();
+  saveImage.removeAttribute("src");
+}
+
+async function shareResultFile() {
+  const response = await fetch(currentResultData.result_url, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("无法读取生成图片，请刷新页面后重试");
+  const blob = await response.blob();
+  const safeName = (currentResultData.product?.product_name || "商品长图")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .slice(0, 48);
+  const file = new File([blob], `${safeName}.png`, { type: blob.type || "image/png" });
+  if (!navigator.canShare({ files: [file] })) return false;
+  await navigator.share({ files: [file], title: "商品长图" });
+  return true;
+}
+
+async function saveResultToPhone() {
+  if (!currentResultData?.result_url) return;
+  clearError();
+  const label = downloadButton.querySelector("span");
+  const originalLabel = label.textContent;
+  try {
+    if (navigator.share && navigator.canShare) {
+      label.textContent = "准备图片…";
+      try {
+        if (await shareResultFile()) return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        // Some embedded browsers expose the Share API but reject file shares.
+        // Keep the user in the authenticated page and fall back to long-press saving.
+      }
+    }
+    openSaveDialog();
+  } finally {
+    label.textContent = originalLabel;
+  }
 }
 
 function failJob(message) {
@@ -287,7 +427,7 @@ async function restoreCurrentJob() {
   const inputResponse = await fetch(data.input_url, { cache: "no-store" });
   if (inputResponse.ok) {
     const blob = await inputResponse.blob();
-    const restoredFile = new File([blob], "uploaded-jewelry-image", { type: blob.type || "image/jpeg" });
+    const restoredFile = new File([blob], "uploaded-product-image", { type: blob.type || "image/jpeg" });
     await setSelectedFile(restoredFile, { persist: false });
   }
   updateProgress(data);
@@ -304,6 +444,13 @@ async function initializePage() {
   eventSource = null;
   try {
     await initializeSession();
+    const requestedJobId = new URLSearchParams(window.location.search).get("job");
+    if (/^[0-9a-f]{32}$/.test(requestedJobId || "")) {
+      try { window.sessionStorage.setItem(currentJobStorageKey, requestedJobId); } catch { /* ignore */ }
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("job");
+      window.history.replaceState(null, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+    }
     let jobId = null;
     try { jobId = window.sessionStorage.getItem(currentJobStorageKey); } catch { /* ignore */ }
     if (jobId) await restoreCurrentJob();
@@ -319,17 +466,23 @@ async function initializePage() {
 
 async function startGeneration() {
   if (!selectedFile) return;
+  if (!(await hasAvailableUse())) return;
   clearError();
   setBusy(true);
   prepareResultState();
-  updateProgress({ progress: 2, stage: "正在上传珠宝图片" });
+  updateProgress({ progress: 2, stage: "正在上传商品图片" });
 
   const formData = new FormData();
   formData.append("image", selectedFile, selectedFile.name);
   try {
     const response = await fetch("/api/jobs", { method: "POST", body: formData });
     const payload = await response.json();
+    if (response.status === 402) {
+      showRechargeDialog();
+      return;
+    }
     if (!response.ok) throw new Error(payload.detail || "任务创建失败");
+    currentServiceStatus = "processing";
     await deleteDraft();
     try { window.sessionStorage.setItem(currentJobStorageKey, payload.job_id); } catch { /* ignore */ }
     updateProgress(payload);
@@ -339,18 +492,18 @@ async function startGeneration() {
   }
 }
 
-dropZone.addEventListener("click", () => {
+dropZone.addEventListener("click", async () => {
   if (selectedFile) {
     openPreview();
-  } else if (!fileInput.disabled) {
+  } else if (!fileInput.disabled && await hasAvailableUse()) {
     fileInput.click();
   }
 });
-dropZone.addEventListener("keydown", (event) => {
+dropZone.addEventListener("keydown", async (event) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     if (selectedFile) openPreview();
-    else if (!fileInput.disabled) fileInput.click();
+    else if (!fileInput.disabled && await hasAvailableUse()) fileInput.click();
   }
 });
 fileInput.addEventListener("change", async () => {
@@ -369,7 +522,7 @@ fileInput.addEventListener("change", async () => {
   });
 });
 dropZone.addEventListener("drop", async (event) => {
-  if (!fileInput.disabled && event.dataTransfer.files[0]) await setSelectedFile(event.dataTransfer.files[0]);
+  if (!fileInput.disabled && event.dataTransfer.files[0] && await hasAvailableUse()) await setSelectedFile(event.dataTransfer.files[0]);
 });
 clearButton.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -385,13 +538,38 @@ previewDialog.addEventListener("click", (event) => {
   if (event.target === previewDialog) previewDialog.close();
 });
 window.addEventListener("resize", updatePreviewLayout);
+window.addEventListener("pageshow", () => { initializeSession().catch(() => {}); });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) initializeSession().catch(() => {});
+});
 generateButton.addEventListener("click", startGeneration);
-downloadButton.addEventListener("click", (event) => {
-  if (downloadButton.classList.contains("disabled")) event.preventDefault();
+downloadButton.addEventListener("click", async (event) => {
+  if (downloadButton.classList.contains("disabled") || downloadButton.getAttribute("aria-disabled") === "true") {
+    event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  const label = downloadButton.querySelector("span");
+  const originalLabel = label?.textContent;
+  downloadButton.setAttribute("aria-disabled", "true");
+  if (label) label.textContent = "正在下载 ZIP…";
+  try {
+    await window.ProductZipDownload.download(downloadButton.href, "product-images.zip");
+  } catch (error) {
+    showError(error.message || "ZIP 下载失败，请稍后重试");
+  } finally {
+    downloadButton.setAttribute("aria-disabled", "false");
+    if (label) label.textContent = originalLabel;
+  }
+});
+closeSaveDialog.addEventListener("click", closePhoneSaveDialog);
+closeRechargeDialog?.addEventListener("click", () => rechargeDialog.close());
+saveDialog.addEventListener("click", (event) => {
+  if (event.target === saveDialog) closePhoneSaveDialog();
 });
 
 refreshIcons();
-logoutButton?.addEventListener("click", async (event) => {
+logoutButtons.forEach((logoutButton) => logoutButton.addEventListener("click", async (event) => {
   event.preventDefault();
   try {
     const response = await fetch("/api/auth/logout", {
@@ -405,5 +583,5 @@ logoutButton?.addEventListener("click", async (event) => {
   } catch (error) {
     showError(error.message || "退出失败，请刷新页面后重试");
   }
-});
+}));
 initializePage();

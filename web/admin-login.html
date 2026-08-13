@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>管理员登录 · 商品视觉系统</title>
+  <link rel="stylesheet" href="/admin.css?v=20260813">
+</head>
+<body class="admin-login-body">
+  <main class="login-card">
+    <div class="admin-brand"><span>DF</span><div><strong>商品视觉管理后台</strong><small>ADMIN CONSOLE</small></div></div>
+    <div class="login-heading">
+      <p>管理员身份验证</p>
+      <h1>登录后台</h1>
+      <span>此入口仅供授权管理员使用，与微信用户登录相互独立。</span>
+    </div>
+    <form id="adminLoginForm" class="login-form">
+      <label>管理员账号<input name="username" autocomplete="username" required autofocus></label>
+      <label>管理员密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="loginError" class="form-error" role="alert"></p>
+      <button type="submit">登录管理后台</button>
+    </form>
+  </main>
+  <script src="/admin-login.js?v=20260813" defer></script>
+</body>
+</html>

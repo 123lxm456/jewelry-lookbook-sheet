@@ -1,7 +1,38 @@
+# Secrets and local configuration
 .env
+.env.*
+!.env.example
+cert/*.pem
+
+# Dependency environments
 .venv/
+venv/
+vendor/
+
+# Python caches and test artifacts
 __pycache__/
-*.pyc
-tmp/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and operating-system metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+
+# Runtime data, generated assets and logs
+outputs/
 output/
 var/
+tmp/
+*.log
+
+# Temporary files created by atomic writes
+*.tmp
+*.part

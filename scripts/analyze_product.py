@@ -12,8 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from jewelry_workflow.product_spec import ProductSpec, SourceMetadata  # noqa: E402
 from jewelry_workflow.qwen_vision import QwenVisionClient  # noqa: E402
+from product_workflow.compatibility import load_product_spec  # noqa: E402
+from product_workflow.models import CopySection, MarketingCopy, ProductSpec, SourceMetadata  # noqa: E402
+from product_workflow.registry import select_strategy  # noqa: E402
 
 
 def load_env(path: Path) -> None:
@@ -42,8 +44,24 @@ def write_json(path: Path, data: dict) -> None:
     temporary.replace(path)
 
 
+def provisional_copy(strategy: dict) -> MarketingCopy:
+    """Create schema-valid copy so image prompts can start before copywriting.
+
+    The provisional value is never used in the final long image.  A separate
+    copy worker replaces it while the image workers are already running.
+    """
+    sections = []
+    for panel in strategy["panels"]:
+        label = str(panel["label"])
+        sections.append(CopySection(
+            panel_id=panel["id"], eyebrow="PRODUCT STORY", title=label[:16],
+            body="商品视觉信息正在生成\n完整文案将同步更新",
+        ))
+    return MarketingCopy(sections=sections)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze one jewelry image with a Qwen vision model.")
+    parser = argparse.ArgumentParser(description="Analyze one non-apparel product image with a vision model.")
     parser.add_argument("image", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
@@ -58,9 +76,11 @@ def main() -> None:
 
     if args.output.exists() and not args.force:
         try:
-            existing = ProductSpec.model_validate_json(args.output.read_text(encoding="utf-8"))
-            model_matches = not configured_model or existing.source.qwen_model == configured_model
+            existing = load_product_spec(args.output)
+            model_matches = not configured_model or existing.source.vision_model == configured_model
             if existing.source.image_sha256 == image_hash and model_matches:
+                if json.loads(args.output.read_text(encoding="utf-8")).get("schema_version") != "2.0":
+                    write_json(args.output, existing.model_dump(mode="json", by_alias=True))
                 print(f"Reusing Qwen analysis: {args.output}", file=sys.stderr)
                 return
         except (OSError, ValueError):
@@ -72,19 +92,23 @@ def main() -> None:
         raise SystemExit("Set QWEN_API_KEY and QWEN_BASE_URL in .env or the environment")
 
     client = QwenVisionClient(api_key=api_key, base_url=base_url, model=configured_model or None)
-    print(f"Analyzing jewelry with Qwen model: {client.model}", file=sys.stderr)
+    print(f"Analyzing product with Qwen model: {client.model}", file=sys.stderr)
     analysis = client.analyze(args.image)
+    category, strategy = select_strategy(analysis)
     spec = ProductSpec(
         **analysis.model_dump(),
+        strategy_id=strategy["id"],
+        marketing_copy=provisional_copy(strategy),
         source=SourceMetadata(
             image_file=args.image.name,
             image_sha256=image_hash,
-            qwen_model=client.model,
+            vision_model=client.model,
             analyzed_at=datetime.now(timezone.utc),
         ),
     )
     write_json(args.output, spec.model_dump(mode="json", by_alias=True))
-    print(f"Saved product specification: {args.output}", file=sys.stderr)
+    args.output.with_suffix(".copy-pending").write_text("pending\n", encoding="ascii")
+    print(f"Saved product specification: {args.output} ({category.label}/{spec.identity.subcategory})", file=sys.stderr)
 
 
 if __name__ == "__main__":

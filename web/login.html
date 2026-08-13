@@ -2,86 +2,78 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>登录 - Jewelry Lookbook Sheet</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#163b31">
+    <title>微信登录 · Product Visual Studio</title>
     <style>
-      :root { color-scheme: light; font-family: system-ui, sans-serif; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f1ec; color: #28231f; }
-      main { width: min(92vw, 390px); padding: 32px; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px #00000012; }
-      h1 { margin-top: 0; font-size: 24px; }
-      p { color: #716860; }
-      label { display: block; margin: 16px 0 6px; font-size: 14px; }
-      input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #d7cec5; border-radius: 8px; font-size: 16px; }
-      button { width: 100%; margin-top: 20px; padding: 12px; border: 0; border-radius: 8px; background: #29231f; color: #fff; font-size: 16px; cursor: pointer; }
-      .switch { margin-top: 16px; text-align: center; color: #766b62; cursor: pointer; }
-      .error { min-height: 1.4em; margin-top: 12px; color: #b42318; }
+      :root { color-scheme: light; font-family: "Microsoft YaHei", system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-width: 320px; min-height: 100svh; color: #17342b;
+        background: linear-gradient(155deg, #edf7f1 0%, #f7f4ef 55%, #fff 100%);
+      }
+      main {
+        min-height: 100svh; display: flex; flex-direction: column; justify-content: space-between;
+        width: min(100%, 480px); margin: 0 auto;
+        padding: max(56px, env(safe-area-inset-top)) 24px max(28px, env(safe-area-inset-bottom));
+      }
+      .hero { padding-top: 8vh; }
+      .mark {
+        width: 68px; height: 68px; display: grid; place-items: center; margin-bottom: 28px;
+        color: #fff; background: #176b52; border-radius: 22px; box-shadow: 0 14px 34px #176b5240;
+        font: 34px Georgia, serif;
+      }
+      h1 { margin: 0; font-size: clamp(30px, 9vw, 40px); line-height: 1.16; letter-spacing: -.04em; }
+      .lead { margin: 18px 0 0; color: #66766f; font-size: 15px; line-height: 1.8; }
+      .features { display: grid; gap: 13px; margin: 36px 0; padding: 0; list-style: none; color: #465b53; font-size: 14px; }
+      .features li { display: flex; align-items: center; gap: 11px; }
+      .features span { width: 22px; height: 22px; display: grid; place-items: center; color: #176b52; background: #dcefe6; border-radius: 50%; font-weight: 800; }
+      .login-card { padding: 20px; background: #ffffffd9; border: 1px solid #d9e5de; border-radius: 22px; box-shadow: 0 18px 50px #18382c12; backdrop-filter: blur(12px); }
+      .wechat-button {
+        min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px;
+        color: #fff; background: #07c160; border-radius: 14px; font-size: 17px; font-weight: 700;
+        text-decoration: none; -webkit-tap-highlight-color: transparent;
+      }
+      .wechat-button:active { transform: scale(.99); background: #06ad56; }
+      .wechat-icon { width: 28px; height: 28px; display: grid; place-items: center; background: #fff; color: #07c160; border-radius: 50%; font-size: 16px; }
+      .hint { margin: 13px 2px 0; color: #849089; font-size: 12px; line-height: 1.6; text-align: center; }
+      .error { margin: 0 0 12px; padding: 10px 12px; color: #a53e35; background: #fff1ef; border-radius: 10px; font-size: 13px; }
+      [hidden] { display: none !important; }
+      @media (min-width: 600px) { main { justify-content: center; gap: 40px; } .hero { padding-top: 0; } }
     </style>
   </head>
   <body>
     <main>
-      <h1 id="title">登录系统</h1>
-      <p id="subtitle">登录后使用珠宝商品图册生成工作台。</p>
-      <form id="authForm">
-        <label for="username">用户名</label>
-        <input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
-        <label for="password">密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128">
-        <div id="error" class="error" role="alert"></div>
-        <button id="submit" type="submit">登录</button>
-      </form>
-      <div id="switch" class="switch">没有账号？注册</div>
+      <section class="hero">
+        <div class="mark">P</div>
+        <h1>商品视觉创作，<br>在手机上轻松完成</h1>
+        <p class="lead">上传一张商品图，自动生成适合展示与分享的商品信息长图。</p>
+        <ul class="features">
+          <li><span>✓</span>微信身份自动识别，无需注册账号</li>
+          <li><span>✓</span>图片、任务与生成结果仅自己可见</li>
+        </ul>
+      </section>
+      <section class="login-card" aria-label="微信登录">
+        <p id="loginError" class="error" role="alert" hidden></p>
+        <a id="wechatLogin" class="wechat-button" href="/api/auth/wechat/start">
+          <span class="wechat-icon">●</span>
+          微信授权登录
+        </a>
+        <p class="hint">登录即表示你同意使用微信 OpenID 作为唯一身份标识。系统不会保存微信密码。</p>
+      </section>
     </main>
     <script>
-      const form = document.getElementById("authForm");
-      const title = document.getElementById("title");
-      const subtitle = document.getElementById("subtitle");
-      const submit = document.getElementById("submit");
-      const switchButton = document.getElementById("switch");
-      const error = document.getElementById("error");
-      let registerMode = false;
-
-      switchButton.onclick = () => {
-        registerMode = !registerMode;
-        title.textContent = registerMode ? "注册账号" : "登录系统";
-        subtitle.textContent = registerMode ? "注册后即可使用图片生成工作台。" : "登录后使用珠宝商品图册生成工作台。";
-        submit.textContent = registerMode ? "注册并登录" : "登录";
-        switchButton.textContent = registerMode ? "已有账号？登录" : "没有账号？注册";
-        document.getElementById("password").setAttribute("autocomplete", registerMode ? "new-password" : "current-password");
-        error.textContent = "";
-      };
-
-      form.onsubmit = async (event) => {
-        event.preventDefault();
-        error.textContent = "";
-        submit.disabled = true;
-        const body = new FormData(form);
-        try {
-          const response = await fetch(registerMode ? "/api/auth/register" : "/api/auth/login", {
-            method: "POST", body, credentials: "same-origin"
-          });
-          const raw = await response.text();
-          let data = {};
-          try { data = raw ? JSON.parse(raw) : {}; } catch { /* proxy may return non-JSON */ }
-          if (!response.ok) throw new Error(data.detail || raw || `操作失败（HTTP ${response.status}）`);
-          // A login starts a clean browser workspace.  Clear all client-side
-          // remnants before entering the authenticated application.
-          try {
-            for (const storage of [window.localStorage, window.sessionStorage]) {
-              for (let index = storage.length - 1; index >= 0; index -= 1) storage.removeItem(storage.key(index));
-            }
-            if (window.indexedDB) {
-              await new Promise((resolve) => {
-                const request = window.indexedDB.deleteDatabase("jewelry-workflow");
-                request.onsuccess = request.onerror = request.onblocked = resolve;
-              });
-            }
-          } catch { /* private browsing may deny storage access */ }
-          location.replace("/app?logged-in=" + Date.now());
-        } catch (exception) {
-          error.textContent = exception.message || "操作失败";
-          submit.disabled = false;
-        }
-      };
+      const params = new URLSearchParams(location.search);
+      const next = params.get("next");
+      if (["/app", "/profile", "/pay"].includes(next)) {
+        document.getElementById("wechatLogin").href = `/api/auth/wechat/start?next=${encodeURIComponent(next)}`;
+      }
+      const error = params.get("error");
+      if (error) {
+        const box = document.getElementById("loginError");
+        box.textContent = error;
+        box.hidden = false;
+      }
     </script>
   </body>
 </html>

@@ -1,0 +1,8 @@
+{
+  "id": "apparel",
+  "label": "服装",
+  "supported": false,
+  "strategy_id": null,
+  "aliases": ["服装", "衣服", "上衣", "裤子", "裙子", "apparel", "clothing", "garment"],
+  "subcategories": ["衬衫", "T恤", "外套", "连衣裙", "半身裙", "裤装", "内衣", "其他服装"]
+}

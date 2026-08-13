@@ -1,0 +1,8 @@
+[
+  {"id": "trial_1", "name": "单次体验", "uses": 1, "amount_cent": 1, "display_price": "0.01", "description": "1件体验套餐"},
+  {"id": "small_5", "name": "小套餐", "uses": 5, "amount_cent": 2900, "display_price": "29", "description": "5件套餐"},
+  {"id": "standard_10", "name": "标准套餐", "uses": 10, "amount_cent": 5600, "display_price": "56", "description": "10件套餐"},
+  {"id": "premium_20", "name": "高级套餐", "uses": 20, "amount_cent": 10600, "display_price": "106", "description": "20件套餐"},
+  {"id": "business_50", "name": "商业套餐", "uses": 50, "amount_cent": 25000, "display_price": "250", "description": "50件套餐"},
+  {"id": "enterprise_100", "name": "企业套餐", "uses": 100, "amount_cent": 47500, "display_price": "475", "description": "100件套餐"}
+]

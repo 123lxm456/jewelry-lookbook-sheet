@@ -1,0 +1,18 @@
+{
+  "name": "deedface/jewelry-lookbook-payment",
+  "description": "WeChat Pay v3 bridge for the jewelry lookbook application",
+  "type": "project",
+  "require": {
+    "php": ">=8.0",
+    "ext-json": "*",
+    "ext-openssl": "*",
+    "ext-pdo": "*",
+    "ext-pdo_mysql": "*",
+    "endroid/qr-code": "^5.1",
+    "wechatpay/wechatpay": "^1.4"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {}
+  }
+}

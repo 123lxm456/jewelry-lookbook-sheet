@@ -1,0 +1,8 @@
+{
+  "id": "shoes",
+  "label": "鞋类",
+  "supported": true,
+  "strategy_id": "shoe-five-panel-v1",
+  "aliases": ["鞋", "鞋子", "shoe", "footwear"],
+  "subcategories": ["运动鞋", "皮鞋", "高跟鞋", "靴子", "凉鞋", "拖鞋", "其他鞋类"]
+}

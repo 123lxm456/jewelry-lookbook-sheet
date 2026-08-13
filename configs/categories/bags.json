@@ -1,0 +1,8 @@
+{
+  "id": "bags",
+  "label": "箱包皮具",
+  "supported": true,
+  "strategy_id": "bag-five-panel-v1",
+  "aliases": ["包", "箱包", "皮具", "bag", "handbag", "backpack"],
+  "subcategories": ["手提包", "女包", "男包", "单肩包", "斜挎包", "双肩包", "背包", "钱包", "卡包", "其他皮具"]
+}

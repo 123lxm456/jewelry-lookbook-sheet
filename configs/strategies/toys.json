@@ -1,0 +1,45 @@
+{
+  "id": "toy-five-panel-v1",
+  "panels": [
+    {
+      "id": "toy_identity", "label": "主体全貌", "copy_purpose": "完整呈现玩具类型、造型、配色、数量和主要比例",
+      "scene_prompt_en": "Present the exact toy as a complete primary product. Adapt the support and display method to the observed toy type, scale cues, structure, and stability; do not force a plush, figure, model, block set, or vehicle into another toy type's presentation grammar.",
+      "backdrop_en": "A product-appropriate environment selected from the observed design language, age positioning, materials, and likely display context, with no competing toy products.",
+      "composition_en": "Keep every identity-defining part readable and use the assigned structured shot plan rather than a default centered catalog pose.",
+      "lighting_en": "Commercial light adapted to the observed soft fibers, plastic, painted surface, wood, metal, or mixed construction without changing color.",
+      "safe_zone": [0.0, 0.06, 0.45, 0.94], "crop_height": 1460, "focus_y": 0.48
+    },
+    {
+      "id": "toy_structure", "label": "结构视角", "copy_purpose": "从差异明显的方向展示轮廓、结构、部件关系与比例",
+      "scene_prompt_en": "Reveal the exact toy's observed silhouette and construction from the assigned alternate direction. Show only joints, seams, modules, wheels, controls, blocks, accessories, or articulation that are genuinely visible; never invent hidden mechanisms.",
+      "backdrop_en": "A restrained product-demonstration setting appropriate to the analyzed toy, clearly different from the other four scenes.",
+      "composition_en": "Use the assigned camera azimuth, elevation, distance, placement, and composition literally while keeping the relevant structure legible.",
+      "lighting_en": "Precise dimensional light with truthful edges, volumes, joins, and surface response.",
+      "safe_zone": [0.04, 0.64, 0.96, 0.96], "crop_height": 1520, "focus_y": 0.44
+    },
+    {
+      "id": "detail", "label": "材质工艺", "copy_purpose": "完整玩具中突出最有辨识度的材质、工艺或功能细节",
+      "scene_prompt_en": "Show the exact complete toy in a detail-led photograph. Use angle and lighting to emphasize its most identity-defining observed material, texture, face detail, paintwork, seam, joint, connection, control, printed piece, or construction feature. Select only evidence visible in the input.",
+      "backdrop_en": "A minimal tonal product-photography environment derived from the toy's actual palette and material character.",
+      "composition_en": "Keep the complete toy and every outer edge inside frame with breathing room while making the selected authentic detail visually prominent.",
+      "lighting_en": "Material-specific raking or diffused light showing truthful fiber, plastic, paint, wood, metal, or composite texture.",
+      "safe_zone": [0.56, 0.04, 0.96, 0.46], "crop_height": 1640, "focus_y": 0.52
+    },
+    {
+      "id": "toy_interaction", "label": "互动场景", "copy_purpose": "根据实际玩具类型选择可信的互动、玩法或陈列情境",
+      "scene_prompt_en": "Use the exact toy in the analyzed category-appropriate interaction, play, assembly, control, collection, or display situation. If a function or age suitability is uncertain, choose a non-contact contextual display and do not invent behavior.",
+      "backdrop_en": "A sparse, safe, believable context selected from the observed toy type and usage evidence, without additional products or misleading age claims.",
+      "composition_en": "Create real foreground/background depth and a clearly different product location, scale, camera distance, and visual rhythm from all studio views.",
+      "lighting_en": "Natural context-appropriate advertising light with plausible contact and scale.",
+      "safe_zone": [0.04, 0.04, 0.48, 0.46], "crop_height": 1500, "focus_y": 0.58
+    },
+    {
+      "id": "hero", "label": "广告主视觉", "copy_purpose": "以独立摄影语言突出玩具设计与商业展示价值",
+      "scene_prompt_en": "Create a premium campaign image for the exact analyzed toy, choosing a sculptural, playful, collectible, technical, educational, or refined visual language only when supported by its observed type and design.",
+      "backdrop_en": "A distinctive product-specific campaign set derived from the toy's palette, form, materials, and audience cues, without text or extra toy products.",
+      "composition_en": "Apply the assigned non-repeating camera, distance, product position, and composition with bold negative space and an intact recognizable identity.",
+      "lighting_en": "Polished campaign lighting adapted to the toy's observed character while preserving every original color and finish.",
+      "safe_zone": [0.56, 0.68, 0.96, 0.94], "crop_height": 1560, "focus_y": 0.48
+    }
+  ]
+}

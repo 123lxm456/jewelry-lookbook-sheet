@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST="${WEB_HOST:-0.0.0.0}"
 PORT="${WEB_PORT:-8000}"
-export AUTH_RESET_ON_START="${AUTH_RESET_ON_START:-true}"
+export AUTH_RESET_ON_START="${AUTH_RESET_ON_START:-false}"
 VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
 
 if [[ -n "${WEB_PYTHON:-}" ]]; then

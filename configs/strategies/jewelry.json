@@ -1,0 +1,46 @@
+{
+  "id": "jewelry-five-panel-v2",
+  "panels": [
+    {
+      "id": "worn", "label": "佩戴展示", "copy_purpose": "自然佩戴场景，突出正确佩戴位置与商品本体",
+      "scene_prompt_en": "Show the exact product naturally and correctly worn by one adult model at its category-appropriate body location.",
+      "backdrop_en": "Warm refined ivory interior, understated clothing, minimal cream decor.",
+      "composition_en": "Use the minimum body crop needed for the correct wearing location; place the product-bearing subject on the right two-thirds and keep the left side calm.",
+      "lighting_en": "Warm side-window light, natural skin, controlled highlights on metal, stones, and surface details.",
+      "safe_zone": [0.0, 0.06, 0.48, 0.94], "crop_height": 1460, "focus_y": 0.42
+    },
+    {
+      "id": "detail", "label": "结构全貌", "copy_purpose": "完整商品中突出可观察的结构、镶嵌、轮廓与表面细节",
+      "scene_prompt_en": "Show the exact complete item in a detail-led product photograph, using camera angle and light to document its most distinctive construction and surface details without cropping any part.",
+      "backdrop_en": "Pale warm marble with sparse translucent cream accents at the outer corners.",
+      "composition_en": "Keep the complete item and its full outer silhouette inside frame with breathing room; make the defining feature pin-sharp in the upper-middle and keep the lower area quiet.",
+      "lighting_en": "Soft raking daylight, crisp micro-contrast, realistic restrained highlights.",
+      "safe_zone": [0.04, 0.62, 0.96, 0.96], "crop_height": 1520, "focus_y": 0.38
+    },
+    {
+      "id": "still_life", "label": "氛围静物", "copy_purpose": "暖调静物广告，突出商品质感和完整结构",
+      "scene_prompt_en": "Place the exact complete product in an intimate premium afternoon still life using an arrangement appropriate to its structure.",
+      "backdrop_en": "Warm walnut surface, edge of an open vintage book, one clear stemmed glass; sparse and believable.",
+      "composition_en": "Arrange the product clearly across the lower half and keep the upper-right clean.",
+      "lighting_en": "Amber late-afternoon window light with controlled product highlights.",
+      "safe_zone": [0.55, 0.04, 0.96, 0.46], "crop_height": 1640, "focus_y": 0.72
+    },
+    {
+      "id": "gift", "label": "礼赠展示", "copy_purpose": "无品牌礼盒或合适支撑上的完整礼赠陈列",
+      "scene_prompt_en": "Present the exact product on a correctly scaled premium unbranded jewelry support or box appropriate to this item.",
+      "backdrop_en": "Flowing ivory satin and one champagne ribbon confined to the outer edge.",
+      "composition_en": "Show the full product without bending or obstruction and retain a clean upper-left margin.",
+      "lighting_en": "Soft luminous daylight, warm ivory bounce, realistic controlled highlights.",
+      "safe_zone": [0.04, 0.04, 0.48, 0.46], "crop_height": 1500, "focus_y": 0.5
+    },
+    {
+      "id": "mirror", "label": "镜面佩戴", "copy_purpose": "模特自然佩戴及物理一致的镜面生活方式展示",
+      "scene_prompt_en": "Create one complete photograph of the exact product correctly worn by one adult model standing before a real vertical mirror, with one faithful natural reflection in the same coherent scene.",
+      "backdrop_en": "Refined warm ivory dressing interior with a real champagne-framed mirror.",
+      "composition_en": "Keep model, reflection, mirror plane, visible limbs, and product comfortably in frame; reserve a quiet lower clothing or side area.",
+      "lighting_en": "Warm side-window light with believable reflection, perspective, and falloff.",
+      "safe_zone": [0.52, 0.68, 0.96, 0.94], "crop_height": 1560, "focus_y": 0.42,
+      "postprocess": {"type": "mirror_refine", "template": "prompts/postprocess/mirror-refine.txt"}
+    }
+  ]
+}

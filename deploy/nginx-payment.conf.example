@@ -1,0 +1,36 @@
+# Add these exact-match locations to the picture.deedface.com HTTPS server.
+# Replace the PHP-FPM socket with the one installed in your server panel.
+
+location = /jewelry-lookbook-sheet/pay.php {
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /www/wwwroot/picture.deedface.com/jewelry-lookbook-sheet/pay.php;
+    fastcgi_param HTTPS on;
+    fastcgi_param HTTP_COOKIE $http_cookie;
+    fastcgi_pass unix:/tmp/php-cgi-82.sock;
+}
+
+location = /jewelry-lookbook-sheet/check_pay.php {
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /www/wwwroot/picture.deedface.com/jewelry-lookbook-sheet/check_pay.php;
+    fastcgi_param HTTPS on;
+    fastcgi_param HTTP_COOKIE $http_cookie;
+    fastcgi_pass unix:/tmp/php-cgi-82.sock;
+}
+
+location = /jewelry-lookbook-sheet/notify/wxpay.php {
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME /www/wwwroot/picture.deedface.com/jewelry-lookbook-sheet/notify/wxpay.php;
+    fastcgi_param HTTPS on;
+    fastcgi_pass unix:/tmp/php-cgi-82.sock;
+}
+
+# Never expose configuration, private keys, Composer internals or bootstrap code.
+location ~ ^/jewelry-lookbook-sheet/(?:\.env|cert/|vendor/|composer\.(?:json|lock)|payment_bootstrap\.php) {
+    deny all;
+    return 404;
+}
+
+location ^~ /cert/ {
+    deny all;
+    return 404;
+}

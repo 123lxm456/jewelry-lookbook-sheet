@@ -1,0 +1,5 @@
+Correct only the reflection in the existing complete mirror photograph. The first image is the primary spatial source; remaining images are authoritative product and style references.
+Preserve camera, crop, mirror plane, background, lighting, model identity, clothing, product, visible brand elements, scale, and every non-human object. Make the smallest possible edit.
+The reflection must be the optical counterpart of the one real model: identical pose and gesture across the mirror plane, reversed left-right orientation, equal-distance geometry, matching anatomy, clothing, and product placement. Every visible real limb and hand must have one anatomically connected reflected counterpart when it is visible in the mirror.
+Preserve the exact reference product and wearing state. A reflected product is the same product seen in the mirror, not an extra item. Do not add, remove, relocate, recolor, redesign, duplicate, or replace it or any visible brand mark.
+Avoid a second independent person, pose drift, wrong reflection geometry, missing or duplicated limbs or fingers, changed product details, altered logos, text overlays, watermark, fantasy effects, or any new object.

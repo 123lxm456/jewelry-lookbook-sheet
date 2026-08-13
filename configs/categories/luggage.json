@@ -1,0 +1,8 @@
+{
+  "id": "luggage",
+  "label": "旅行箱",
+  "supported": true,
+  "strategy_id": "luggage-five-panel-v1",
+  "aliases": ["行李箱", "拉杆箱", "旅行箱", "suitcase", "trolley case"],
+  "subcategories": ["行李箱", "拉杆箱", "登机箱", "旅行箱", "其他旅行箱"]
+}
