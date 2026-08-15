@@ -24,13 +24,13 @@ location = /jewelry-lookbook-sheet/notify/wxpay.php {
     fastcgi_pass unix:/tmp/php-cgi-82.sock;
 }
 
-# Never expose configuration, private keys, Composer internals or bootstrap code.
-location ~ ^/jewelry-lookbook-sheet/(?:\.env|cert/|vendor/|composer\.(?:json|lock)|payment_bootstrap\.php) {
+# Never expose configuration, private keys, source, runtime data, tests or dependency internals.
+location ~ ^/jewelry-lookbook-sheet/(?:\.|cert/|vendor/|outputs?/|var/|tmp/|tests?/|scripts?/|prompts?/|configs?/|config/|deploy/|product_workflow/|jewelry_workflow/|.*\.(?:py|sh|json|log|db|sqlite|pem|key|p12)|composer\.(?:json|lock)|payment_bootstrap\.php) {
     deny all;
     return 404;
 }
 
-location ^~ /cert/ {
+location ^~ /jewelry-lookbook-sheet/cert/ {
     deny all;
     return 404;
 }

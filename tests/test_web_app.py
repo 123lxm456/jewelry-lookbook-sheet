@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -25,11 +26,12 @@ from PIL import Image
 
 os.environ.setdefault("DB_DRIVER", "sqlite")
 os.environ.setdefault("APP_DB_PATH", str(Path(tempfile.gettempdir()) / "lookbook-test-import.db"))
+os.environ.setdefault("APP_ENV", "test")
 
 from fastapi import HTTPException
 
 import app as app_module
-from app import PAYMENT_PACKAGES, JobState, job_failure_error, paid_user, parse_workflow_line, public_job_error
+from app import FairJobQueue, PAYMENT_PACKAGES, JobState, job_failure_error, paid_user, parse_workflow_line, public_job_error
 from auth import AuthStore, DatabaseConfig, User
 
 
@@ -49,6 +51,30 @@ def jpeg_bytes() -> bytes:
 
 
 class QueueRecoveryTests(unittest.TestCase):
+    def test_fair_queue_prioritizes_users_with_less_running_work(self) -> None:
+        queue = FairJobQueue()
+        root = Path(tempfile.gettempdir())
+        queued_jobs = [
+            JobState("1" * 32, 10, root / "one", root / "one/input.jpg"),
+            JobState("2" * 32, 10, root / "two", root / "two/input.jpg"),
+            JobState("3" * 32, 20, root / "three", root / "three/input.jpg"),
+        ]
+        try:
+            for job in queued_jobs:
+                app_module.jobs[job.job_id] = job
+                queue.put_nowait(job.job_id)
+            self.assertEqual(queue.get_nowait(), queued_jobs[0].job_id)
+            queue.task_done()
+            # User 20 has not received a slot yet, so it jumps ahead of user
+            # 10's second task without violating user 10's internal FIFO.
+            self.assertEqual(queue.get_nowait(), queued_jobs[2].job_id)
+            queue.task_done()
+            self.assertEqual(queue.get_nowait(), queued_jobs[1].job_id)
+            queue.task_done()
+        finally:
+            for job in queued_jobs:
+                app_module.jobs.pop(job.job_id, None)
+
     def test_panel_503_log_is_reported_without_exposing_raw_provider_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -197,7 +223,10 @@ class WebAppTests(unittest.TestCase):
                 "WECHAT_APP_SECRET": "test-app-secret",
                 "COOKIE_SECURE": "false",
                 "PAYMENT_REQUIRED": "false",
-                "WEB_MAX_ACTIVE_JOBS": "1",
+                "WEB_MAX_ACTIVE_JOBS": "2",
+                "WEB_MAX_CONCURRENT_UPLOADS": "2",
+                "FAKE_WEB_WORKFLOW_DELAY": "0.08",
+                "RATE_LIMIT_DEV_LOGIN": "200",
             }
         )
         cls.server = subprocess.Popen(
@@ -441,6 +470,38 @@ class WebAppTests(unittest.TestCase):
         response = self.client.post("/api/jobs", files={"image": ("bad.txt", b"not-an-image", "text/plain")})
         self.assertEqual(response.status_code, 400)
 
+    def test_cross_site_state_change_is_rejected_and_security_headers_are_set(self) -> None:
+        rejected = self.client.post(
+            "/api/auth/logout",
+            headers={"Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"},
+        )
+        self.assertEqual(rejected.status_code, 403)
+        self.assertEqual(self.client.get("/api/session").status_code, 200)
+        page = self.client.get("/app")
+        self.assertEqual(page.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(page.headers["x-frame-options"], "DENY")
+        self.assertEqual(page.headers["referrer-policy"], "no-referrer")
+        self.assertIn("frame-ancestors 'none'", page.headers["content-security-policy"])
+
+    def test_dev_login_is_not_exposed_on_a_public_host(self) -> None:
+        response = self.client.post(
+            "/api/auth/wechat/dev-login",
+            headers={"Host": "public.example"},
+            data={"openid": "should-not-exist"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_uploaded_image_is_reencoded_without_trailing_payload(self) -> None:
+        payload = jpeg_bytes() + b"<script>alert('polyglot')</script>"
+        response = self.client.post(
+            "/api/jobs", files={"image": ("polyglot.jpg", payload, "image/jpeg")},
+        )
+        self.assertEqual(response.status_code, 202)
+        stored = self.client.get(response.json()["input_url"])
+        self.assertEqual(stored.status_code, 200)
+        self.assertNotIn(b"polyglot", stored.content)
+        self.assertLess(len(stored.content), len(payload))
+
     def test_connection_error_is_safe_for_frontend(self) -> None:
         error = public_job_error(RuntimeError("traceback\nopenai.APIConnectionError: Connection error."))
         self.assertIn("图片生成服务连接失败", error)
@@ -583,19 +644,21 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(preview.headers["content-type"], "image/png")
         self.assertEqual(self.client.get(f"/api/jobs/{job_id}/images/not-allowed").status_code, 404)
 
-        private_roots = [path for path in Path(self.temporary.name).glob("wechat-*") if path.is_dir()]
-        self.assertEqual(len(private_roots), 1)
-        user_output_root = private_roots[0]
-        user_jobs = list(user_output_root.glob("job-*"))
-        self.assertEqual(len(user_jobs), 1)
-        self.assertTrue((user_jobs[0] / "input.jpg").is_file())
+        matching_jobs = []
+        for metadata_path in Path(self.temporary.name).glob("wechat-*/job-*/job-state.json"):
+            if json.loads(metadata_path.read_text(encoding="utf-8"))["job_id"] == job_id:
+                matching_jobs.append(metadata_path.parent)
+        self.assertEqual(len(matching_jobs), 1)
+        current_job_dir = matching_jobs[0]
+        user_output_root = current_job_dir.parent
+        self.assertTrue((current_job_dir / "input.jpg").is_file())
 
-        self.assertTrue((user_jobs[0] / "product-long.png").is_file())
-        self.assertTrue((user_jobs[0] / "job-state.json").is_file())
+        self.assertTrue((current_job_dir / "product-long.png").is_file())
+        self.assertTrue((current_job_dir / "job-state.json").is_file())
         self.assertFalse(list(Path(self.temporary.name).glob("job-*")))
 
-        archive_path = user_jobs[0] / "product-images.zip"
-        saved_archive_path = user_jobs[0] / "product-images.zip.saved"
+        archive_path = current_job_dir / "product-images.zip"
+        saved_archive_path = current_job_dir / "product-images.zip.saved"
         archive_path.replace(saved_archive_path)
         try:
             self.assertEqual(self.client.post(f"/api/jobs/{job_id}/download-transfer").status_code, 409)
@@ -621,12 +684,70 @@ class WebAppTests(unittest.TestCase):
 
             own = other.post("/api/jobs", files={"image": ("other.jpg", jpeg_bytes(), "image/jpeg")})
             self.assertEqual(own.status_code, 202)
-            second_roots = [path for path in Path(self.temporary.name).glob("wechat-*") if path.is_dir()]
-            self.assertEqual(len(second_roots), 2)
-            self.assertNotEqual(second_roots[0], second_roots[1])
+            other_job_id = own.json()["job_id"]
+            other_metadata = next(
+                path for path in Path(self.temporary.name).glob("wechat-*/job-*/job-state.json")
+                if json.loads(path.read_text(encoding="utf-8"))["job_id"] == other_job_id
+            )
+            self.assertNotEqual(other_metadata.parent.parent, user_output_root)
 
         finally:
             other.close()
+
+    def test_multiple_users_upload_generate_poll_and_download_concurrently(self) -> None:
+        clients = [httpx.Client(base_url=self.base_url, timeout=10, trust_env=False) for _ in range(4)]
+        try:
+            for index, client in enumerate(clients):
+                login = client.post("/api/auth/wechat/dev-login", data={"openid": f"concurrent-user-{index}"})
+                self.assertEqual(login.status_code, 200)
+
+            def upload(item: tuple[int, httpx.Client]):
+                index, client = item
+                return client.post(
+                    "/api/jobs",
+                    files={"image": (f"concurrent-{index}.jpg", jpeg_bytes(), "image/jpeg")},
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(clients)) as executor:
+                responses = list(executor.map(upload, enumerate(clients)))
+            self.assertEqual([response.status_code for response in responses], [202] * len(clients))
+            job_ids = [response.json()["job_id"] for response in responses]
+            self.assertEqual(len(set(job_ids)), len(job_ids))
+
+            # An authenticated user can see only its own task, even while all
+            # jobs share the same worker queue and are changing state.
+            for owner_index, client in enumerate(clients):
+                for job_index, job_id in enumerate(job_ids):
+                    expected = 200 if owner_index == job_index else 404
+                    self.assertEqual(client.get(f"/api/jobs/{job_id}").status_code, expected)
+
+            maximum_running = 0
+            terminal_states: list[str] = []
+            for _ in range(300):
+                terminal_states = [
+                    clients[index].get(f"/api/jobs/{job_id}").json()["status"]
+                    for index, job_id in enumerate(job_ids)
+                ]
+                maximum_running = max(maximum_running, terminal_states.count("running"))
+                if all(state in {"completed", "failed"} for state in terminal_states):
+                    break
+                time.sleep(0.01)
+            self.assertGreaterEqual(maximum_running, 2)
+            self.assertEqual(terminal_states, ["completed"] * len(clients))
+
+            def download(item: tuple[int, httpx.Client]):
+                index, client = item
+                return client.get(f"/api/jobs/{job_ids[index]}/download")
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(clients)) as executor:
+                downloads = list(executor.map(download, enumerate(clients)))
+            self.assertEqual([response.status_code for response in downloads], [200] * len(clients))
+            for response in downloads:
+                with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                    self.assertEqual(len(archive.infolist()), 6)
+        finally:
+            for client in clients:
+                client.close()
 
     def test_z_two_uploads_are_accepted_by_fifo_queue(self) -> None:
         login = self.client.post("/api/auth/wechat/dev-login", data={"openid": "queue-test-openid"})
@@ -650,6 +771,16 @@ class WebAppTests(unittest.TestCase):
 
 
 class PaymentModelTests(unittest.TestCase):
+    def test_admin_session_is_invalidated_when_credentials_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = AuthStore(DatabaseConfig(driver="sqlite", sqlite_path=Path(temporary) / "admin.db"))
+            token = store.create_admin_session("credential-fingerprint-a")
+            self.assertEqual(
+                store.admin_for_token(token, "credential-fingerprint-a", "admin").username,
+                "admin",
+            )
+            self.assertIsNone(store.admin_for_token(token, "credential-fingerprint-b", "admin"))
+
     def test_new_wechat_user_is_unpaid_and_schema_contains_order_table(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database_path = Path(temporary) / "payment.db"

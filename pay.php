@@ -64,6 +64,15 @@ try {
         $pdo->rollBack();
         json_response(['detail' => '充值账户不存在，请重新登录', 'error_code' => 'PAY_ACCOUNT_MISSING'], 401);
     }
+    $recentPending = $pdo->prepare(
+        "SELECT COUNT(*) FROM pay_order WHERE BINARY openid = BINARY ? " .
+        "AND order_status = 'pending' AND create_time >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE)"
+    );
+    $recentPending->execute([$user['openid']]);
+    if ((int)$recentPending->fetchColumn() >= 10) {
+        $pdo->rollBack();
+        json_response(['detail' => '创建支付订单过于频繁，请稍后重试', 'error_code' => 'PAY_RATE_LIMITED'], 429);
+    }
     $insert = $pdo->prepare(
         "INSERT INTO pay_order(order_id, openid, session_token_hash, total_fee, package_id, package_name, credits, order_status, pay_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0)"

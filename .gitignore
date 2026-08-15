@@ -13,8 +13,11 @@ vendor/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.hypothesis/
+.tox/
 .mypy_cache/
 .ruff_cache/
+.cache/
 .coverage
 htmlcov/
 
@@ -32,6 +35,9 @@ output/
 var/
 tmp/
 *.log
+*.pid
+*.sqlite
+*.sqlite3
 
 # Temporary files created by atomic writes
 *.tmp

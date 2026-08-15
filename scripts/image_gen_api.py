@@ -11,7 +11,9 @@ import argparse
 import base64
 import fcntl
 import os
+import stat
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -25,9 +27,27 @@ def global_image_slot():
     limit = int(os.environ.get("IMAGE2_GLOBAL_PARALLELISM", "5"))
     if not 1 <= limit <= 64:
         fail("IMAGE2_GLOBAL_PARALLELISM must be between 1 and 64")
-    lock_root = Path(os.environ.get("IMAGE2_GLOBAL_LIMIT_DIR", "/tmp/jewelry-lookbook-image-slots"))
-    lock_root.mkdir(parents=True, exist_ok=True)
-    handles = [open(lock_root / f"slot-{index:02d}.lock", "a+b") for index in range(limit)]
+    default_root = Path(tempfile.gettempdir()) / f"jewelry-lookbook-image-slots-{os.getuid()}"
+    lock_root = Path(os.environ.get("IMAGE2_GLOBAL_LIMIT_DIR", str(default_root)))
+    lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root_stat = lock_root.lstat()
+    if not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.getuid():
+        fail("IMAGE2_GLOBAL_LIMIT_DIR must be a directory owned by the service account")
+    lock_root.chmod(0o700)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    handles = []
+    try:
+        for index in range(limit):
+            descriptor = os.open(
+                lock_root / f"slot-{index:02d}.lock",
+                os.O_CREAT | os.O_RDWR | no_follow,
+                0o600,
+            )
+            handles.append(os.fdopen(descriptor, "a+b"))
+    except Exception:
+        for handle in handles:
+            handle.close()
+        raise
     acquired = None
     try:
         while acquired is None:

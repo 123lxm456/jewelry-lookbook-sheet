@@ -2,29 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import fcntl
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
 import signal
 import time
 import uuid
+import warnings
 import zipfile
-from collections import deque
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from auth import (
     ADMIN_SESSION_COOKIE,
@@ -52,8 +55,10 @@ DATABASE_CONFIG = DatabaseConfig.from_environment(ROOT)
 WORKFLOW_SCRIPT = Path(os.environ.get("WEB_WORKFLOW_SCRIPT", ROOT / "run_workflow.sh")).resolve()
 MAX_UPLOAD_BYTES = int(os.environ.get("WEB_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 MAX_IMAGE_PIXELS = int(os.environ.get("WEB_MAX_IMAGE_PIXELS", "40000000"))
-MAX_ACTIVE_JOBS = int(os.environ.get("WEB_MAX_ACTIVE_JOBS", "2"))
+MAX_ACTIVE_JOBS = int(os.environ.get("WEB_MAX_ACTIVE_JOBS", "4"))
 MAX_QUEUED_JOBS = int(os.environ.get("WEB_MAX_QUEUED_JOBS", "100"))
+MAX_CONCURRENT_UPLOADS = int(os.environ.get("WEB_MAX_CONCURRENT_UPLOADS", "8"))
+UPLOAD_SLOT_TIMEOUT_SECONDS = float(os.environ.get("WEB_UPLOAD_SLOT_TIMEOUT_SECONDS", "10"))
 JOB_TIMEOUT_SECONDS = int(os.environ.get("WEB_JOB_TIMEOUT_SECONDS", "3600"))
 QUEUE_TIMEOUT_SECONDS = int(os.environ.get("WEB_QUEUE_TIMEOUT_SECONDS", "7200"))
 ORPHAN_RESERVATION_TIMEOUT_SECONDS = int(os.environ.get("WEB_ORPHAN_RESERVATION_TIMEOUT_SECONDS", "86400"))
@@ -62,6 +67,8 @@ if MAX_ACTIVE_JOBS < 1:
     raise RuntimeError("WEB_MAX_ACTIVE_JOBS must be at least 1")
 if MAX_QUEUED_JOBS < MAX_ACTIVE_JOBS:
     raise RuntimeError("WEB_MAX_QUEUED_JOBS must be at least WEB_MAX_ACTIVE_JOBS")
+if MAX_CONCURRENT_UPLOADS < 1 or UPLOAD_SLOT_TIMEOUT_SECONDS <= 0:
+    raise RuntimeError("Web upload concurrency settings must be positive")
 if min(JOB_TIMEOUT_SECONDS, QUEUE_TIMEOUT_SECONDS, ORPHAN_RESERVATION_TIMEOUT_SECONDS, MAINTENANCE_INTERVAL_SECONDS) < 1:
     raise RuntimeError("Web task timeout and maintenance settings must be positive")
 ALLOWED_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
@@ -72,15 +79,101 @@ WECHAT_APP_SECRET = os.environ.get("WECHAT_APP_SECRET", "")
 WECHAT_REDIRECT_URI = os.environ.get("WECHAT_REDIRECT_URI", "")
 WECHAT_DEV_LOGIN = os.environ.get("WECHAT_DEV_LOGIN", "false").lower() in {"1", "true", "yes", "on"}
 PAYMENT_REQUIRED = os.environ.get("PAYMENT_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+APP_ENV = os.environ.get("APP_ENV", "development" if WECHAT_DEV_LOGIN else "production").strip().lower()
+APP_PUBLIC_URL = os.environ.get("APP_PUBLIC_URL", "").strip().rstrip("/")
 PAY_CREATE_URL = os.environ.get("PAY_CREATE_URL", "/jewelry-lookbook-sheet/pay.php")
 LOGIN_NEXT_COOKIE = "lookbook_login_next"
 LOGIN_TARGETS = {"/app", "/profile", "/pay"}
 PAY_BRIDGE_SECRET = os.environ.get("PAY_BRIDGE_SECRET", "") or WECHAT_APP_SECRET
 DOWNLOAD_TRANSFER_SECRET = os.environ.get("DOWNLOAD_TRANSFER_SECRET", "") or PAY_BRIDGE_SECRET
 DOWNLOAD_TRANSFER_TTL_SECONDS = int(os.environ.get("DOWNLOAD_TRANSFER_TTL_SECONDS", "600"))
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "ltd")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "ltd123456")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "ltd" if WECHAT_DEV_LOGIN else "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "ltd123456" if WECHAT_DEV_LOGIN else "")
+ALLOW_WEAK_ADMIN_PASSWORD = os.environ.get("ALLOW_WEAK_ADMIN_PASSWORD", "false").lower() in {"1", "true", "yes", "on"}
 ADMIN_PAGE_SIZE_MAX = 100
+RATE_LIMIT_ADMIN_LOGIN = int(os.environ.get("RATE_LIMIT_ADMIN_LOGIN", "10"))
+RATE_LIMIT_DEV_LOGIN = int(os.environ.get("RATE_LIMIT_DEV_LOGIN", "30"))
+RATE_LIMIT_PAYMENT_AUTH = int(os.environ.get("RATE_LIMIT_PAYMENT_AUTH", "30"))
+RATE_LIMIT_JOB_CREATE = int(os.environ.get("RATE_LIMIT_JOB_CREATE", "20"))
+RATE_LIMIT_OAUTH_CALLBACK = int(os.environ.get("RATE_LIMIT_OAUTH_CALLBACK", "30"))
+
+
+def validate_security_configuration() -> None:
+    if APP_ENV not in {"development", "test", "production"}:
+        raise RuntimeError("APP_ENV 仅支持 development、test 或 production")
+    if APP_ENV == "production":
+        if WECHAT_DEV_LOGIN:
+            raise RuntimeError("生产环境禁止启用 WECHAT_DEV_LOGIN")
+        if not COOKIE_SECURE:
+            raise RuntimeError("生产环境必须设置 COOKIE_SECURE=true")
+        if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+            raise RuntimeError("生产环境必须设置 ADMIN_USERNAME 和 ADMIN_PASSWORD")
+        if not ALLOW_WEAK_ADMIN_PASSWORD and (
+            ADMIN_USERNAME == "ltd" or ADMIN_PASSWORD == "ltd123456" or len(ADMIN_PASSWORD) < 12
+        ):
+            raise RuntimeError("管理员凭据仍为默认值或密码少于 12 个字符")
+        if not APP_PUBLIC_URL or not APP_PUBLIC_URL.startswith("https://"):
+            raise RuntimeError("生产环境 APP_PUBLIC_URL 必须使用 HTTPS")
+    if min(RATE_LIMIT_ADMIN_LOGIN, RATE_LIMIT_DEV_LOGIN, RATE_LIMIT_PAYMENT_AUTH,
+           RATE_LIMIT_JOB_CREATE, RATE_LIMIT_OAUTH_CALLBACK) < 1:
+        raise RuntimeError("接口限速配置必须为正整数")
+
+
+validate_security_configuration()
+ADMIN_SESSION_PRINCIPAL = hashlib.sha256(
+    f"{ADMIN_USERNAME}\0{ADMIN_PASSWORD}".encode("utf-8")
+).hexdigest()
+
+
+class SlidingWindowLimiter:
+    """Small process-local abuse guard; the reverse proxy remains the outer limit."""
+
+    def __init__(self) -> None:
+        self.attempts: dict[tuple[str, str], deque[float]] = defaultdict(deque)
+
+    def check(self, bucket: str, identity: str, limit: int, window_seconds: int) -> None:
+        now = time.monotonic()
+        events = self.attempts[(bucket, identity)]
+        while events and events[0] <= now - window_seconds:
+            events.popleft()
+        if len(events) >= limit:
+            retry_after = max(1, int(window_seconds - (now - events[0])))
+            raise HTTPException(
+                status_code=429, detail="请求过于频繁，请稍后重试",
+                headers={"Retry-After": str(retry_after)},
+            )
+        events.append(now)
+
+
+abuse_limiter = SlidingWindowLimiter()
+
+
+def request_identity(request: Request) -> str:
+    # X-Forwarded-For is intentionally ignored without a trusted-proxy allowlist.
+    return request.client.host if request.client else "unknown"
+
+
+def is_loopback_request(request: Request) -> bool:
+    try:
+        peer_is_loopback = ipaddress.ip_address(request_identity(request)).is_loopback
+    except ValueError:
+        peer_is_loopback = False
+    hostname = (request.url.hostname or "").lower()
+    try:
+        host_is_loopback = hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        host_is_loopback = hostname == "localhost"
+    return peer_is_loopback and host_is_loopback
+
+
+def normalized_origin(value: str) -> str | None:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
 
 
 def load_payment_packages() -> list[dict[str, object]]:
@@ -345,6 +438,7 @@ class JobState:
         }
         temporary = self.metadata_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.chmod(0o600)
         temporary.replace(self.metadata_path)
 
     def public_data(self) -> dict[str, object]:
@@ -380,9 +474,49 @@ class JobState:
 
 
 jobs: dict[str, JobState] = {}
-job_queue: asyncio.Queue[str] = asyncio.Queue()
+active_jobs_by_user: dict[int, int] = defaultdict(int)
+
+
+class FairJobQueue(asyncio.Queue[str]):
+    """FIFO within each user, least-active-user-first across users.
+
+    A user can consume all idle workers when alone. As soon as another user
+    queues work, the next worker favors the user with fewer running jobs, which
+    prevents a large batch from one account from causing head-of-line blocking.
+    """
+
+    def _init(self, maxsize: int) -> None:
+        self._queue: deque[str] = deque()
+        self._last_served: dict[int, int] = {}
+        self._serve_sequence = 0
+
+    def _get(self) -> str:
+        best_index = 0
+        best_score: tuple[int, int, int] | None = None
+        best_user_id = -1
+        for index, job_id in enumerate(self._queue):
+            job = jobs.get(job_id)
+            user_id = job.user_id if job is not None else -1
+            score = (
+                active_jobs_by_user.get(user_id, 0),
+                self._last_served.get(user_id, -1),
+                index,
+            )
+            if best_score is None or score < best_score:
+                best_index, best_score, best_user_id = index, score, user_id
+        self._queue.rotate(-best_index)
+        job_id = self._queue.popleft()
+        self._queue.rotate(best_index)
+        self._serve_sequence += 1
+        self._last_served[best_user_id] = self._serve_sequence
+        return job_id
+
+
+job_queue: asyncio.Queue[str] = FairJobQueue()
 queue_workers: list[asyncio.Task[None]] = []
 maintenance_task: asyncio.Task[None] | None = None
+upload_slots: asyncio.Semaphore | None = None
+queue_admission_lock: asyncio.Lock | None = None
 auth_store = AuthStore(DATABASE_CONFIG)
 if os.environ.get("AUTH_RESET_ON_START", "false").lower() in {"1", "true", "yes", "on"}:
     auth_store.clear_sessions()
@@ -390,26 +524,78 @@ if os.environ.get("AUTH_RESET_ON_START", "false").lower() in {"1", "true", "yes"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global maintenance_task
-    recover_persisted_jobs()
-    for index in range(MAX_ACTIVE_JOBS):
-        queue_workers.append(asyncio.create_task(job_worker(index), name=f"job-queue-worker-{index}"))
-    maintenance_task = asyncio.create_task(maintenance_worker(), name="job-maintenance-worker")
+    global maintenance_task, queue_admission_lock, upload_slots
+    # asyncio synchronization primitives must be created on Uvicorn's running
+    # loop, not at module import (which can be a different loop in tests/tools).
+    upload_slots = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+    queue_admission_lock = asyncio.Lock()
+    JOBS_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    scheduler_lock = (JOBS_ROOT / ".scheduler.lock").open("a+b")
     try:
-        yield
+        try:
+            fcntl.flock(scheduler_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError(
+                "APP_OUTPUT_ROOT 已被另一个 Web 调度进程使用；请保持单进程，避免任务重复执行"
+            ) from None
+        scheduler_lock.seek(0)
+        scheduler_lock.truncate()
+        scheduler_lock.write(str(os.getpid()).encode("ascii"))
+        scheduler_lock.flush()
+        recover_persisted_jobs()
+        for index in range(MAX_ACTIVE_JOBS):
+            queue_workers.append(asyncio.create_task(job_worker(index), name=f"job-queue-worker-{index}"))
+        maintenance_task = asyncio.create_task(maintenance_worker(), name="job-maintenance-worker")
+        try:
+            yield
+        finally:
+            for worker in queue_workers:
+                worker.cancel()
+            if maintenance_task is not None:
+                maintenance_task.cancel()
+            await asyncio.gather(*queue_workers, return_exceptions=True)
+            if maintenance_task is not None:
+                await asyncio.gather(maintenance_task, return_exceptions=True)
+                maintenance_task = None
+            queue_workers.clear()
     finally:
-        for worker in queue_workers:
-            worker.cancel()
-        if maintenance_task is not None:
-            maintenance_task.cancel()
-        await asyncio.gather(*queue_workers, return_exceptions=True)
-        if maintenance_task is not None:
-            await asyncio.gather(maintenance_task, return_exceptions=True)
-            maintenance_task = None
-        queue_workers.clear()
+        fcntl.flock(scheduler_lock.fileno(), fcntl.LOCK_UN)
+        scheduler_lock.close()
 
 
 app = FastAPI(title="General Product Visual Generation System", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def browser_security(request: Request, call_next):
+    """Reject cross-site state changes and attach baseline browser hardening."""
+    if request.method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+        fetch_site = request.headers.get("sec-fetch-site", "").lower()
+        supplied_origin = request.headers.get("origin", "")
+        if fetch_site == "cross-site":
+            return JSONResponse({"detail": "拒绝跨站请求"}, status_code=403)
+        if supplied_origin:
+            expected = normalized_origin(APP_PUBLIC_URL) or normalized_origin(str(request.base_url))
+            if expected is None or normalized_origin(supplied_origin) != expected:
+                return JSONResponse({"detail": "请求来源无效"}, status_code=403)
+    if request.url.path == "/api/jobs":
+        content_length = request.headers.get("content-length", "")
+        if content_length.isdigit() and int(content_length) > MAX_UPLOAD_BYTES + 1024 * 1024:
+            return JSONResponse({"detail": "上传请求体过大"}, status_code=413)
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(self)")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; "
+        "form-action 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self'",
+    )
+    if COOKIE_SECURE:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 def authenticated_user(request: Request) -> User:
@@ -498,6 +684,9 @@ async def wechat_login_start(request: Request, next: str = "/app") -> Response:
 
 @app.get("/api/auth/wechat/callback", name="wechat_login_callback")
 async def wechat_login_callback(request: Request, code: str = "", state: str = "") -> Response:
+    abuse_limiter.check("oauth-callback", request_identity(request), RATE_LIMIT_OAUTH_CALLBACK, 60)
+    if len(code) > 1024 or len(state) > 256:
+        raise HTTPException(status_code=400, detail="微信登录参数无效")
     if not valid_oauth_state(request, state):
         raise HTTPException(status_code=400, detail="微信登录状态无效或已过期")
     if not code:
@@ -520,42 +709,38 @@ async def wechat_login_callback(request: Request, code: str = "", state: str = "
     openid = payload.get("openid")
     if not openid or payload.get("errcode"):
         raise HTTPException(status_code=401, detail="微信授权验证失败")
-    user = auth_store.find_or_create_user(str(openid))
+    user = await asyncio.to_thread(auth_store.find_or_create_user, str(openid))
     destination = login_target(request.cookies.get(LOGIN_NEXT_COOKIE))
     separator = "&" if "?" in destination else "?"
     response = RedirectResponse(url=f"{destination}{separator}wechat-login=success", status_code=303)
     clear_oauth_state_cookie(response)
     response.delete_cookie(LOGIN_NEXT_COOKIE, path="/api/auth/wechat/callback")
-    set_session_cookie(response, auth_store.create_session(user.id), COOKIE_SECURE)
+    session_token = await asyncio.to_thread(auth_store.create_session, user.id)
+    set_session_cookie(response, session_token, COOKIE_SECURE)
     return no_store(response)
 
 
 @app.post("/api/auth/wechat/dev-login", include_in_schema=False)
-async def wechat_dev_login(response: Response, openid: str = Form(...)) -> dict[str, object]:
+async def wechat_dev_login(request: Request, response: Response, openid: str = Form(...)) -> dict[str, object]:
     """Explicit local/test login; never enabled in a production environment."""
     if not WECHAT_DEV_LOGIN:
         raise HTTPException(status_code=404, detail="接口不存在")
-    user = auth_store.find_or_create_user(openid)
-    set_session_cookie(response, auth_store.create_session(user.id), COOKIE_SECURE)
+    if not is_loopback_request(request):
+        raise HTTPException(status_code=404, detail="接口不存在")
+    abuse_limiter.check("dev-login", request_identity(request), RATE_LIMIT_DEV_LOGIN, 60)
+    user = await asyncio.to_thread(auth_store.find_or_create_user, openid)
+    session_token = await asyncio.to_thread(auth_store.create_session, user.id)
+    set_session_cookie(response, session_token, COOKIE_SECURE)
     no_store(response)
     return {"id": user.id, "openid_masked": f"***{user.openid[-4:]}"}
 
 
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response) -> dict[str, bool]:
-    auth_store.delete_session(request.cookies.get(SESSION_COOKIE))
+    await asyncio.to_thread(auth_store.delete_session, request.cookies.get(SESSION_COOKIE))
     clear_session_cookie(response)
     no_store(response)
     return {"ok": True}
-
-
-@app.get("/logout", include_in_schema=False)
-async def logout_page(request: Request) -> RedirectResponse:
-    auth_store.delete_session(request.cookies.get(SESSION_COOKIE))
-    response = RedirectResponse(url="/?logged-out=1", status_code=303)
-    clear_session_cookie(response)
-    no_store(response)
-    return response
 
 
 @app.get("/api/auth/me")
@@ -582,7 +767,7 @@ async def web_session(response: Response, user: User = Depends(authenticated_use
 
 @app.get("/api/payment/status")
 async def payment_status(request: Request, response: Response, user: User = Depends(authenticated_user)) -> dict[str, object]:
-    refreshed = auth_store.user_for_token(request.cookies.get(SESSION_COOKIE))
+    refreshed = await asyncio.to_thread(auth_store.user_for_token, request.cookies.get(SESSION_COOKIE))
     if refreshed is None:
         raise HTTPException(status_code=401, detail="用户不存在")
     response.headers["Cache-Control"] = "no-store"
@@ -598,7 +783,7 @@ async def payment_status(request: Request, response: Response, user: User = Depe
 
 
 @app.post("/api/payment/authorization")
-async def payment_authorization(user: User = Depends(authenticated_user)) -> dict[str, object]:
+async def payment_authorization(request: Request, user: User = Depends(authenticated_user)) -> dict[str, object]:
     """Issue a short-lived signed identity for the separate PHP payment runtime.
 
     PHP no longer has to choose between duplicate/path-scoped browser cookies;
@@ -606,6 +791,7 @@ async def payment_authorization(user: User = Depends(authenticated_user)) -> dic
     """
     if not PAY_BRIDGE_SECRET:
         raise HTTPException(status_code=503, detail="支付授权密钥尚未配置")
+    abuse_limiter.check("payment-authorization", f"{user.id}:{request_identity(request)}", RATE_LIMIT_PAYMENT_AUTH, 60)
     expires_at = int(time.time()) + 300
     payload = {
         "v": 1, "sub": user.openid, "sid": user.session_hash,
@@ -672,11 +858,16 @@ def generation_history(user: User) -> list[dict[str, object]]:
 
 @app.get("/api/account")
 async def account(user: User = Depends(authenticated_user)) -> dict[str, object]:
-    summary = auth_store.account_summary(user.openid)
+    # History scans and SQLite/MySQL reads are blocking operations. Run them in
+    # parallel threads so a large account cannot stall unrelated API polling.
+    summary, records = await asyncio.gather(
+        asyncio.to_thread(auth_store.account_summary, user.openid),
+        asyncio.to_thread(generation_history, user),
+    )
     return {
         "user": {"id": user.id, "openid_masked": f"***{user.openid[-4:]}", "status": user.status},
         **summary,
-        "generation_records": generation_history(user),
+        "generation_records": records,
         "generation_credit_cost": 1,
         "packages": PAYMENT_PACKAGES,
     }
@@ -760,21 +951,37 @@ def job_failure_error(job: JobState, exc: Exception) -> str:
     return public_job_error(exc)
 
 
-def inspect_image(content: bytes) -> tuple[str, tuple[int, int]]:
+def sanitize_image(content: bytes) -> tuple[str, bytes, tuple[int, int]]:
+    """Fully decode and re-encode uploads to remove metadata and trailing payloads."""
     try:
-        with Image.open(BytesIO(content)) as image:
-            image_format = image.format or ""
-            size = image.size
-            image.verify()
-    except (UnidentifiedImageError, OSError) as exc:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            image = Image.open(BytesIO(content))
+            with image:
+                image.seek(0)
+                image_format = image.format or ""
+                size = image.size
+                if image_format not in ALLOWED_FORMATS:
+                    raise HTTPException(status_code=400, detail="仅支持 JPEG、PNG 或 WebP 图片")
+                if size[0] < 64 or size[1] < 64:
+                    raise HTTPException(status_code=400, detail="图片尺寸过小")
+                if size[0] * size[1] > MAX_IMAGE_PIXELS:
+                    raise HTTPException(status_code=400, detail="图片像素尺寸超过限制")
+                image.load()
+                clean = ImageOps.exif_transpose(image)
+                if image_format == "JPEG":
+                    clean = clean.convert("RGB")
+                elif clean.mode not in {"RGB", "RGBA"}:
+                    clean = clean.convert("RGBA" if "transparency" in image.info else "RGB")
+                output = BytesIO()
+                save_options = {"JPEG": {"quality": 95}, "PNG": {"optimize": True}, "WEBP": {"quality": 95}}
+                clean.save(output, format=image_format, **save_options[image_format])
+                sanitized = output.getvalue()
+    except HTTPException:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="上传文件不是有效图片") from exc
-    if image_format not in ALLOWED_FORMATS:
-        raise HTTPException(status_code=400, detail="仅支持 JPEG、PNG 或 WebP 图片")
-    if size[0] < 64 or size[1] < 64:
-        raise HTTPException(status_code=400, detail="图片尺寸过小")
-    if size[0] * size[1] > MAX_IMAGE_PIXELS:
-        raise HTTPException(status_code=400, detail="图片像素尺寸超过限制")
-    return ALLOWED_FORMATS[image_format], size
+    return ALLOWED_FORMATS[image_format], sanitized, size
 
 
 def parse_workflow_line(job: JobState, line: str) -> None:
@@ -877,8 +1084,6 @@ async def stop_process(process: asyncio.subprocess.Process | None) -> None:
 
 
 async def execute_job(job: JobState) -> None:
-    job.reconcile_steps()
-    job.update(status="running", progress=4, stage="正在启动生成流程")
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
     command = [
@@ -889,7 +1094,9 @@ async def execute_job(job: JobState) -> None:
     ]
     process: asyncio.subprocess.Process | None = None
     try:
-        if not job.has_complete_image_set():
+        await asyncio.to_thread(job.reconcile_steps)
+        job.update(status="running", progress=4, stage="正在启动生成流程")
+        if not await asyncio.to_thread(job.has_complete_image_set):
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=ROOT,
@@ -898,7 +1105,8 @@ async def execute_job(job: JobState) -> None:
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
             )
-            assert process.stdout is not None
+            if process.stdout is None:
+                raise RuntimeError("生成流程标准输出管道创建失败")
             async with asyncio.timeout(JOB_TIMEOUT_SECONDS):
                 while True:
                     try:
@@ -914,16 +1122,20 @@ async def execute_job(job: JobState) -> None:
             if return_code != 0:
                 tail = "\n".join(job.log_tail)
                 raise RuntimeError(f"生成流程退出，状态码 {return_code}\n{tail}")
-        job.reconcile_steps()
-        if not job.has_complete_image_set():
-            missing = [filename for _, filename, path in job.image_paths if not job.valid_image(path)]
+        await asyncio.to_thread(job.reconcile_steps)
+        if not await asyncio.to_thread(job.has_complete_image_set):
+            missing = await asyncio.to_thread(
+                lambda: [filename for _, filename, path in job.image_paths if not job.valid_image(path)]
+            )
             raise RuntimeError(f"生成流程结束，但六张最终图片不完整：{', '.join(missing)}")
-        if not job.valid_archive():
+        if not await asyncio.to_thread(job.valid_archive):
             write_job_archive(job)
         # Commit the charge before publishing the completed state so SSE and
         # personal-center refreshes can never observe a successful image with
         # a stale balance.
-        if PAYMENT_REQUIRED and not auth_store.finalize_generation(job.job_id, success=True):
+        if PAYMENT_REQUIRED and not await asyncio.to_thread(
+            auth_store.finalize_generation, job.job_id, success=True,
+        ):
             raise RuntimeError("生成已完成，但账户扣费确认失败，请联系管理员")
         job.recoverable = False
         job.update(status="completed", progress=100, stage="商品信息长图生成完成")
@@ -952,7 +1164,7 @@ async def execute_job(job: JobState) -> None:
         else:
             job.update(status="failed")
         if PAYMENT_REQUIRED and not job.recoverable:
-            auth_store.finalize_generation(job.job_id, success=False)
+            await asyncio.to_thread(auth_store.finalize_generation, job.job_id, success=False)
 
 
 def write_job_archive(job: JobState) -> None:
@@ -965,6 +1177,7 @@ def write_job_archive(job: JobState) -> None:
             for _, filename, image_path in job.image_paths:
                 archive.write(image_path, arcname=filename)
         temporary.replace(job.archive_path)
+        job.archive_path.chmod(0o600)
         job.set_step("zip", "success")
         job.persist()
     except Exception as exc:
@@ -981,7 +1194,24 @@ async def job_worker(index: int) -> None:
         try:
             job = jobs.get(job_id)
             if job is not None and job.status == "queued":
-                await execute_job(job)
+                active_jobs_by_user[job.user_id] += 1
+                try:
+                    await execute_job(job)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # A malformed state file or local I/O failure must fail one
+                    # task, not permanently remove a queue worker.
+                    job.error = public_job_error(exc)
+                    job.recoverable = True
+                    try:
+                        job.update(status="failed", stage="任务调度异常，可稍后恢复")
+                    except Exception:
+                        print(f"[job worker {index}] failed to persist {job_id}: {exc}", flush=True)
+                finally:
+                    active_jobs_by_user[job.user_id] -= 1
+                    if active_jobs_by_user[job.user_id] <= 0:
+                        active_jobs_by_user.pop(job.user_id, None)
         finally:
             job_queue.task_done()
 
@@ -1133,47 +1363,87 @@ def load_job(job_id: str, user_id: int) -> JobState | None:
     return None
 
 
+def store_job_input(user: User, job_id: str, extension: str, content: bytes) -> tuple[Path, Path]:
+    """Create a collision-proof private task directory and persist its upload."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    private_root = user_jobs_root(user)
+    output_dir = private_root / f"job-{timestamp}-{job_id[:8]}"
+    private_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_root.chmod(0o700)
+    output_dir.mkdir(exist_ok=False, mode=0o700)
+    input_path = output_dir / f"input{extension}"
+    try:
+        input_path.write_bytes(content)
+        input_path.chmod(0o600)
+    except BaseException:
+        input_path.unlink(missing_ok=True)
+        output_dir.rmdir()
+        raise
+    return output_dir, input_path
+
+
+def current_upload_slots() -> asyncio.Semaphore:
+    global upload_slots
+    if upload_slots is None:
+        upload_slots = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+    return upload_slots
+
+
+def current_admission_lock() -> asyncio.Lock:
+    global queue_admission_lock
+    if queue_admission_lock is None:
+        queue_admission_lock = asyncio.Lock()
+    return queue_admission_lock
+
+
 @app.post("/api/jobs", status_code=202)
-async def create_job(image: UploadFile = File(...), user: User = Depends(authenticated_user)) -> dict[str, object]:
+async def create_job(request: Request, image: UploadFile = File(...), user: User = Depends(authenticated_user)) -> dict[str, object]:
     if PAYMENT_REQUIRED and user.remaining_uses < 1:
         raise HTTPException(status_code=402, detail="账户余额不足，请前往个人中心充值后继续")
-    content = await image.read(MAX_UPLOAD_BYTES + 1)
-    await image.close()
-    if not content:
-        raise HTTPException(status_code=400, detail="请选择商品图片")
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="图片文件不能超过 20 MB")
-    extension, _ = inspect_image(content)
-    # Check capacity after the last await so concurrent uploads cannot all pass
-    # a stale queue-size check before any one of them is persisted.
-    active_jobs = sum(job.status in {"queued", "running"} for job in jobs.values())
-    if active_jobs >= MAX_QUEUED_JOBS:
-        raise HTTPException(status_code=429, detail="当前任务队列已满，请稍后重试")
-
-    # Freeze one account credit after validation. It is charged only when the
-    # workflow succeeds; failed tasks release it. The reservation is atomic so
-    # concurrent requests cannot reuse the same balance.
-    job_id = uuid.uuid4().hex
-    if PAYMENT_REQUIRED and not auth_store.reserve_generation(user.openid, job_id):
-        raise HTTPException(status_code=402, detail="账户可用次数不足，请充值后继续")
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    # Every upload and generated artifact is stored below a directory derived
-    # from the authenticated OpenID; no client-supplied identity enters paths.
-    output_dir = user_jobs_root(user) / f"job-{timestamp}-{job_id[:8]}"
+    abuse_limiter.check("job-create", f"{user.id}:{request_identity(request)}", RATE_LIMIT_JOB_CREATE, 60)
+    slots = current_upload_slots()
     try:
-        output_dir.mkdir(parents=True, exist_ok=False)
-        input_path = output_dir / f"input{extension}"
-        input_path.write_bytes(content)
-    except Exception:
-        if PAYMENT_REQUIRED:
-            auth_store.finalize_generation(job_id, success=False)
-        raise
+        await asyncio.wait_for(slots.acquire(), timeout=UPLOAD_SLOT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        await image.close()
+        raise HTTPException(
+            status_code=503, detail="当前上传处理繁忙，请稍后重试", headers={"Retry-After": "2"},
+        ) from None
+    try:
+        content = await image.read(MAX_UPLOAD_BYTES + 1)
+        if not content:
+            raise HTTPException(status_code=400, detail="请选择商品图片")
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="图片文件不能超过 20 MB")
+        # Pillow decoding/re-encoding is CPU-heavy. Keeping it off the event
+        # loop lets login, polling and SSE remain responsive during uploads.
+        extension, content, _ = await asyncio.to_thread(sanitize_image, content)
+    finally:
+        await image.close()
+        slots.release()
 
-    job = JobState(job_id=job_id, user_id=user.id, output_dir=output_dir, input_path=input_path)
-    job.persist()
-    jobs[job_id] = job
-    job_queue.put_nowait(job_id)
+    # Capacity check, credit reservation, private file creation and in-memory
+    # registration form one admission transaction inside this server process.
+    # No await outside this lock can let simultaneous uploads overfill the FIFO.
+    async with current_admission_lock():
+        active_jobs = sum(job.status in {"queued", "running"} for job in jobs.values())
+        if active_jobs >= MAX_QUEUED_JOBS:
+            raise HTTPException(status_code=429, detail="当前任务队列已满，请稍后重试")
+        job_id = uuid.uuid4().hex
+        if PAYMENT_REQUIRED and not await asyncio.to_thread(auth_store.reserve_generation, user.openid, job_id):
+            raise HTTPException(status_code=402, detail="账户可用次数不足，请充值后继续")
+        try:
+            output_dir, input_path = await asyncio.to_thread(
+                store_job_input, user, job_id, extension, content,
+            )
+            job = JobState(job_id=job_id, user_id=user.id, output_dir=output_dir, input_path=input_path)
+            await asyncio.to_thread(job.persist)
+            jobs[job_id] = job
+            job_queue.put_nowait(job_id)
+        except BaseException:
+            if PAYMENT_REQUIRED:
+                await asyncio.to_thread(auth_store.finalize_generation, job_id, success=False)
+            raise
     return job.public_data()
 
 
@@ -1191,7 +1461,7 @@ async def cancel_queued_job(job_id: str, user: User = Depends(authenticated_user
     job.recoverable = False
     job.update(status="failed", stage="任务已取消")
     if PAYMENT_REQUIRED:
-        auth_store.finalize_generation(job.job_id, success=False)
+        await asyncio.to_thread(auth_store.finalize_generation, job.job_id, success=False)
     return job.public_data()
 
 
@@ -1203,20 +1473,25 @@ async def resume_job(job_id: str, user: User = Depends(authenticated_user)) -> d
         raise HTTPException(status_code=409, detail="当前任务不可恢复")
     if not job.input_path.is_file():
         raise HTTPException(status_code=409, detail="原始商品图片已丢失，无法恢复任务")
-    active_jobs = sum(item.status in {"queued", "running"} for item in jobs.values())
-    if active_jobs >= MAX_QUEUED_JOBS:
-        raise HTTPException(status_code=429, detail="当前任务队列已满，请稍后重试")
-    if PAYMENT_REQUIRED and not auth_store.resume_generation(user.openid, job.job_id):
-        raise HTTPException(status_code=409, detail="原任务的计费预留已失效，请联系管理员")
-    job.reset_failed_steps()
-    job.status = "queued"
-    job.error = None
-    job.stage = "任务已恢复，等待从断点继续"
-    job.queued_at = datetime.now(timezone.utc).isoformat()
-    job.resume_count += 1
-    job.persist()
-    job.changed.set()
-    job_queue.put_nowait(job.job_id)
+    async with current_admission_lock():
+        # Recheck after acquiring the lock: two resume requests for the same
+        # task must not enqueue duplicate executions.
+        if job.status != "failed" or not job.recoverable:
+            raise HTTPException(status_code=409, detail="当前任务不可恢复")
+        active_jobs = sum(item.status in {"queued", "running"} for item in jobs.values())
+        if active_jobs >= MAX_QUEUED_JOBS:
+            raise HTTPException(status_code=429, detail="当前任务队列已满，请稍后重试")
+        if PAYMENT_REQUIRED and not await asyncio.to_thread(auth_store.resume_generation, user.openid, job.job_id):
+            raise HTTPException(status_code=409, detail="原任务的计费预留已失效，请联系管理员")
+        job.reset_failed_steps()
+        job.status = "queued"
+        job.error = None
+        job.stage = "任务已恢复，等待从断点继续"
+        job.queued_at = datetime.now(timezone.utc).isoformat()
+        job.resume_count += 1
+        job.persist()
+        job.changed.set()
+        job_queue.put_nowait(job.job_id)
     return job.public_data()
 
 
@@ -1271,7 +1546,7 @@ async def job_image(job_id: str, image_id: str, user: User = Depends(authenticat
 @app.get("/api/jobs/{job_id}/download")
 async def job_download(job_id: str, user: User = Depends(authenticated_user)) -> FileResponse:
     job = get_job(job_id, user.id)
-    return job_archive_response(job)
+    return await asyncio.to_thread(job_archive_response, job)
 
 
 def job_archive_response(job: JobState, *, allow_rebuild: bool = True) -> FileResponse:
@@ -1306,9 +1581,13 @@ async def create_job_download_transfer(
 ) -> dict[str, object]:
     """Create a short-lived cookie-free URL for handoff to another browser."""
     job = get_job(job_id, user.id)
-    if job.status != "completed" or not job.has_complete_image_set():
+    complete_images, valid_archive = await asyncio.gather(
+        asyncio.to_thread(job.has_complete_image_set),
+        asyncio.to_thread(job.valid_archive),
+    )
+    if job.status != "completed" or not complete_images:
         raise HTTPException(status_code=409, detail="结果尚未生成")
-    if not job.valid_archive():
+    if not valid_archive:
         raise HTTPException(status_code=409, detail="当前任务 ZIP 文件不可用")
     token = create_download_transfer_token(job.job_id, user.id)
     return {
@@ -1326,7 +1605,7 @@ async def transferred_job_download(token: str) -> FileResponse:
     """
     job_id, user_id = verify_download_transfer_token(token)
     job = get_job(job_id, user_id)
-    return job_archive_response(job, allow_rebuild=False)
+    return await asyncio.to_thread(job_archive_response, job, allow_rebuild=False)
 
 
 @app.get("/download-open/{token}", include_in_schema=False)
@@ -1334,7 +1613,7 @@ async def mobile_download_handoff(token: str, request: Request) -> Response:
     """Open externally, then immediately download the already-created ZIP."""
     job_id, user_id = verify_download_transfer_token(token)
     job = get_job(job_id, user_id)
-    if job.status != "completed" or not job.valid_archive():
+    if job.status != "completed" or not await asyncio.to_thread(job.valid_archive):
         raise HTTPException(status_code=409, detail="当前任务 ZIP 文件不可用")
     download_url = f"/api/download-transfer/{quote(token, safe='')}"
     if "MicroMessenger" not in request.headers.get("user-agent", ""):
@@ -1353,14 +1632,18 @@ async def mobile_download_handoff(token: str, request: Request) -> Response:
 
 
 def authenticated_admin(request: Request) -> Admin:
-    admin = auth_store.admin_for_token(request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_USERNAME)
+    admin = auth_store.admin_for_token(
+        request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_SESSION_PRINCIPAL, ADMIN_USERNAME,
+    )
     if admin is None:
         raise HTTPException(status_code=401, detail="管理员登录已失效")
     return admin
 
 
 def admin_page_response(request: Request) -> Response:
-    if auth_store.admin_for_token(request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_USERNAME) is None:
+    if auth_store.admin_for_token(
+        request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_SESSION_PRINCIPAL, ADMIN_USERNAME,
+    ) is None:
         response = RedirectResponse(url="/admin/login", status_code=303)
         clear_admin_session_cookie(response)
         return no_store(response)
@@ -1443,7 +1726,9 @@ def admin_job_files(user_id: int, job_id: str) -> tuple[dict[str, object], Path]
 
 @app.get("/admin/login", include_in_schema=False)
 async def admin_login_page(request: Request) -> Response:
-    if auth_store.admin_for_token(request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_USERNAME) is not None:
+    if auth_store.admin_for_token(
+        request.cookies.get(ADMIN_SESSION_COOKIE), ADMIN_SESSION_PRINCIPAL, ADMIN_USERNAME,
+    ) is not None:
         return no_store(RedirectResponse(url="/admin", status_code=303))
     return no_store(FileResponse(WEB_ROOT / "admin-login.html"))
 
@@ -1467,12 +1752,15 @@ async def admin_console_page(request: Request) -> Response:
 
 
 @app.post("/admin/api/login")
-async def admin_login(response: Response, username: str = Form(...), password: str = Form(...)) -> dict[str, object]:
+async def admin_login(request: Request, response: Response, username: str = Form(...), password: str = Form(...)) -> dict[str, object]:
+    abuse_limiter.check("admin-login", request_identity(request), RATE_LIMIT_ADMIN_LOGIN, 300)
+    if len(username) > 128 or len(password) > 1024:
+        raise HTTPException(status_code=401, detail="管理员账号或密码错误")
     username_ok = hmac.compare_digest(username.encode("utf-8"), ADMIN_USERNAME.encode("utf-8"))
     password_ok = hmac.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
     if not (username_ok and password_ok):
         raise HTTPException(status_code=401, detail="管理员账号或密码错误")
-    token = auth_store.create_admin_session(ADMIN_USERNAME)
+    token = auth_store.create_admin_session(ADMIN_SESSION_PRINCIPAL)
     set_admin_session_cookie(response, token, COOKIE_SECURE)
     no_store(response)
     return {"ok": True, "username": ADMIN_USERNAME}
@@ -1554,10 +1842,10 @@ async def admin_job_download(
     data, output_dir = admin_job_files(user_id, job_id)
     input_name = str(data.get("input_name", "input.jpg"))
     job = JobState(job_id, user_id, output_dir, output_dir / input_name, status=str(data.get("status", "unknown")))
-    if job.status != "completed" or not job.has_complete_image_set():
+    if job.status != "completed" or not await asyncio.to_thread(job.has_complete_image_set):
         raise HTTPException(status_code=409, detail="结果尚未生成")
-    if not job.valid_archive():
-        write_job_archive(job)
+    if not await asyncio.to_thread(job.valid_archive):
+        await asyncio.to_thread(write_job_archive, job)
     return no_store(FileResponse(
         job.archive_path, media_type="application/zip",
         filename=f"product-images-{job.job_id[:8]}.zip",

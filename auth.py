@@ -98,8 +98,10 @@ class AuthStore:
     def __init__(self, config: DatabaseConfig) -> None:
         self.config = config
         if config.sqlite_path is not None:
-            config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+            config.sqlite_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.initialize()
+        if config.sqlite_path is not None and config.sqlite_path.exists():
+            config.sqlite_path.chmod(0o600)
 
     @property
     def placeholder(self) -> str:
@@ -112,9 +114,11 @@ class AuthStore:
 
     def connect(self):
         if self.config.driver == "sqlite":
-            assert self.config.sqlite_path is not None
+            if self.config.sqlite_path is None:
+                raise RuntimeError("SQLite 数据库路径未配置")
             connection = sqlite3.connect(self.config.sqlite_path, timeout=30, factory=ClosingSQLiteConnection)
             connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 30000")
             connection.execute("PRAGMA foreign_keys = ON")
             return connection
         try:
@@ -154,6 +158,12 @@ class AuthStore:
 
     def initialize(self) -> None:
         with self.connect() as connection:
+            if self.config.driver == "sqlite":
+                # WAL lets progress/login readers continue while a credit or
+                # session transaction is writing. SQLite remains a local/test
+                # option; production uses MySQL.
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.execute("PRAGMA synchronous = NORMAL")
             # Password-era rows cannot be mapped safely to a WeChat identity.
             # Remove that obsolete schema before creating the OpenID-only tables.
             if self._legacy_user_schema(connection):
@@ -777,7 +787,9 @@ class AuthStore:
             connection.commit()
         return token
 
-    def admin_for_token(self, token: str | None, expected_username: str) -> Admin | None:
+    def admin_for_token(
+        self, token: str | None, expected_principal: str, display_username: str | None = None,
+    ) -> Admin | None:
         if not token:
             return None
         marker = self.placeholder
@@ -789,10 +801,10 @@ class AuthStore:
                 (self._hash_token(token), utc_now()),
             ).fetchone()
         if row is None or not hmac.compare_digest(
-            str(row["username"]).encode("utf-8"), expected_username.encode("utf-8")
+            str(row["username"]).encode("utf-8"), expected_principal.encode("utf-8")
         ):
             return None
-        return Admin(str(row["username"]))
+        return Admin(display_username or str(row["username"]))
 
     def delete_admin_session(self, token: str | None) -> None:
         if not token:

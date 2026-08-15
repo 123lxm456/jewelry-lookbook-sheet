@@ -83,15 +83,15 @@ cp .env.example .env
 | 分组 | 环境变量 |
 | --- | --- |
 | 数据库 | `DB_DRIVER`、`DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`DB_CHARSET`；SQLite 开发环境使用 `APP_DB_PATH` |
-| 微信登录 | `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_REDIRECT_URI`、`COOKIE_SECURE` |
+| 微信登录 | `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_REDIRECT_URI`、`WECHAT_DEV_LOGIN`、`COOKIE_SECURE` |
 | 管理后台 | `ADMIN_USERNAME`、`ADMIN_PASSWORD` |
 | 商品分析 | `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`、`QWEN_RESPONSE_FORMAT`、`QWEN_VALIDATION_ATTEMPTS` |
-| 图片生成 | `IMAGE2_API_KEY`、`IMAGE2_BASE_URL`、`IMAGE2_PARALLELISM`、`IMAGE2_GLOBAL_PARALLELISM`、`IMAGE2_MAX_ATTEMPTS`、`IMAGE2_RETRY_DELAY`、`IMAGE2_BYPASS_PROXY` |
-| Web/任务 | `WEB_HOST`、`WEB_PORT`、`APP_OUTPUT_ROOT`、`WEB_MAX_ACTIVE_JOBS`、`WEB_MAX_QUEUED_JOBS`、`WEB_JOB_TIMEOUT_SECONDS`、`WEB_QUEUE_TIMEOUT_SECONDS`、`WEB_ORPHAN_RESERVATION_TIMEOUT_SECONDS`、`WEB_MAINTENANCE_INTERVAL_SECONDS` |
+| 图片生成 | `IMAGE2_API_KEY`、`IMAGE2_BASE_URL`、`IMAGE2_BYPASS_PROXY`、`IMAGE2_PARALLELISM`、`IMAGE2_GLOBAL_PARALLELISM`、`IMAGE2_MAX_ATTEMPTS`、`IMAGE2_RETRY_DELAY`、`POSTPROCESS_QUALITY_GATE` |
+| Web/任务 | `APP_ENV`、`WEB_HOST`、`WEB_PORT`、`APP_OUTPUT_ROOT`、`WEB_MAX_UPLOAD_BYTES`、`WEB_MAX_IMAGE_PIXELS`、`WEB_MAX_ACTIVE_JOBS`、`WEB_MAX_QUEUED_JOBS`、`WEB_MAX_CONCURRENT_UPLOADS`、`WEB_UPLOAD_SLOT_TIMEOUT_SECONDS`、`WEB_JOB_TIMEOUT_SECONDS`、`WEB_QUEUE_TIMEOUT_SECONDS`、`WEB_ORPHAN_RESERVATION_TIMEOUT_SECONDS`、`WEB_MAINTENANCE_INTERVAL_SECONDS`、`RATE_LIMIT_*` |
 | 支付桥接 | `PAYMENT_REQUIRED`、`PAY_CREATE_URL`、`PAY_BRIDGE_SECRET`、`DOWNLOAD_TRANSFER_SECRET`、`DOWNLOAD_TRANSFER_TTL_SECONDS`、`APP_PUBLIC_URL` |
 | 微信支付 | `WX_APPID`、`WX_MCH_ID`、`WX_API_V3_KEY`、`WX_PRIVATE_KEY_PATH`、`WX_MCH_CERT_PATH`、`WX_PLATFORM_PUBLIC_KEY_PATH`、`WX_PLATFORM_PUBLIC_KEY_ID`、`WX_NOTIFY_URL` |
 
-生产环境必须设置独立的管理员凭据和签名密钥，启用 `COOKIE_SECURE=true`，并保持 `WECHAT_DEV_LOGIN=false`。支付证书应置于公开 Web 目录之外；若暂存于项目 `cert/`，必须使用 Nginx 拒绝访问并限制文件权限。
+生产环境必须设置 `APP_ENV=production`、至少 12 位且非默认值的管理员密码和独立签名密钥，启用 `COOKIE_SECURE=true`，并保持 `WECHAT_DEV_LOGIN=false`；不满足这些条件时服务会拒绝启动。如确需兼容历史弱密码，可显式设置 `ALLOW_WEAK_ADMIN_PASSWORD=true`，但公网环境强烈不建议。支付证书应置于公开 Web 目录之外；若暂存于项目 `cert/`，必须使用 Nginx 拒绝访问并限制文件权限。应用内限速只覆盖单个进程，生产环境还应在 Nginx/WAF 对登录、上传、支付下单和下载接口配置共享限速。
 
 ## 启动方式
 
@@ -101,7 +101,9 @@ cp .env.example .env
 ./run_web.sh
 ```
 
-默认监听 `0.0.0.0:8000`，可通过 `WEB_HOST`、`WEB_PORT` 或 `WEB_PYTHON` 覆盖。`run_api.sh` 是供旧进程管理配置使用的兼容入口，新部署应直接调用 `run_web.sh`。
+默认监听 `0.0.0.0:8000`，可通过 `WEB_HOST`、`WEB_PORT` 或 `WEB_PYTHON` 覆盖。
+
+Web 服务采用单 API 进程内的持久化公平队列；默认同时运行 4 个完整工作流。队列保证同一用户内部 FIFO，并优先调度当前占用工作进程较少的用户，避免单个账户批量提交导致其他用户队首阻塞；系统空闲时单个用户仍可使用全部工作进程。`WEB_MAX_ACTIVE_JOBS` 控制完整工作流并发数，`WEB_MAX_QUEUED_JOBS` 限制等待与运行任务总量。上传图片的解码和重编码在线程中执行，并由 `WEB_MAX_CONCURRENT_UPLOADS` 限制同时处理数，避免大图上传阻塞登录、进度查询和 SSE。每个工作流内部最多并行生成 `IMAGE2_PARALLELISM` 张图，而同一主机上所有工作流实际发往图片服务的总请求数由文件锁支持的 `IMAGE2_GLOBAL_PARALLELISM` 统一限制。调度器会锁定 `APP_OUTPUT_ROOT/.scheduler.lock`，意外启动第二个共享输出目录的 API 进程时会拒绝启动，避免同一任务重复执行。生产环境不要用 Uvicorn `--workers` 直接共享同一个 `APP_OUTPUT_ROOT`；横向扩展需要外置共享任务队列和对象存储。
 
 执行单商品 CLI：
 
@@ -151,3 +153,11 @@ CLI 还支持 `--detail`、`--style`、`--force`、`--force-analysis`、`--mirro
 - `outputs/`、`var/`、`.env`、`cert/*.pem`、`.venv/` 和 `vendor/` 不应纳入版本控制。
 - 运行测试：`.venv/bin/python -m unittest discover -s tests -v`。
 - Python/Shell/前端静态检查可分别使用 `compileall`、`bash -n` 和 `node --check`；PHP 文件可使用 `php -l` 检查。
+
+本地可重复执行多用户队列基准；该脚本使用离线工作流，不会调用外部模型服务：
+
+```bash
+.venv/bin/python tests/concurrency_benchmark.py --users 12 --active-jobs 4 --workflow-delay 0.12
+```
+
+输出包含接收/拒绝任务数、平均及 P95 排队时间、成功率和整批完成时间。调整生产并发参数前，应在目标服务器上用相同参数分别测试，避免仅依据 CPU 核数忽略图片服务配额、内存和磁盘带宽。
