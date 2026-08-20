@@ -881,6 +881,8 @@ def public_job_error(exc: Exception) -> str:
     if any(marker in message for marker in ("APIConnectionError", "RemoteProtocolError", "Connection error")):
         return "图片生成服务连接失败，请检查 IMAGE2_BASE_URL、代理设置和服务状态后重试。详细信息已写入任务 logs 目录。"
     lowered = message.lower()
+    if any(marker in lowered for marker in ("permissionerror", "permission denied", "operation not permitted")):
+        return "任务输出目录不可写，请检查服务运行用户及 outputs 目录权限后恢复任务。"
     if "authenticationerror" in lowered or "error code: 401" in lowered or "status_code=401" in lowered:
         return "商品分析服务认证失败，请检查 QWEN_API_KEY 后恢复任务。"
     if "permissiondenied" in lowered or "error code: 403" in lowered or "status_code=403" in lowered:
@@ -930,7 +932,10 @@ def panel_failure_error(job: JobState, number: str) -> str:
 
 def job_failure_error(job: JobState, exc: Exception) -> str:
     """Prefer the durable stage log, while returning only a safe diagnosis."""
-    if job.error:
+    # parse_workflow_line records a generic stage/status message as soon as it
+    # sees the shell error marker. Do not let that placeholder hide the more
+    # useful, sanitized diagnosis in the durable analysis log.
+    if job.error and not job.error.startswith("失败阶段："):
         return job.error
     if job.steps.get("analysis", {}).get("status") in {"running", "failed"}:
         analysis_log = job.output_dir / "logs" / "analysis.log"
@@ -940,6 +945,8 @@ def job_failure_error(job: JobState, exc: Exception) -> str:
             diagnostic = ""
         if diagnostic.strip():
             lowered = diagnostic.lower()
+            if any(marker in lowered for marker in ("permissionerror", "permission denied", "operation not permitted")):
+                return "任务输出目录不可写，请检查服务运行用户及 outputs 目录权限后恢复任务。"
             if any(marker in lowered for marker in ("apiconnectionerror", "remoteprotocolerror", "connection error", "connecterror")):
                 return "商品分析服务连接失败，请检查 QWEN_BASE_URL 和服务状态后恢复任务。"
             safe = public_job_error(RuntimeError(diagnostic))
@@ -948,6 +955,10 @@ def job_failure_error(job: JobState, exc: Exception) -> str:
             if safe == diagnostic[-600:]:
                 return "商品信息分析失败，详细原因已保存到任务 logs/analysis.log；请管理员检查后恢复任务。"
             return safe
+    if "五图商品一致性与重复度校验" in job.stage and any(
+        marker in str(exc).lower() for marker in ("timeout", "timed out", "apitimeouterror")
+    ):
+        return "五图质量校验服务请求超时；商品分析和五张展示图已完成，可从当前断点恢复。"
     return public_job_error(exc)
 
 
@@ -1020,6 +1031,8 @@ def parse_workflow_line(job: JobState, line: str) -> None:
         number = payload.split("::", 1)[0]
         if number.isdigit():
             job.error = panel_failure_error(job, f"{int(number):02d}")
+    elif line.startswith("::workflow::quality_degraded::"):
+        job.update(stage="五图质量校验超时，已采用生成前约束与本地重复检测继续")
     elif line.startswith("::workflow::error::"):
         details = line.split("::workflow::error::", 1)[1]
         failed_stage = details.split("::status=", 1)[0].removeprefix("stage=")
@@ -1030,7 +1043,7 @@ def parse_workflow_line(job: JobState, line: str) -> None:
             job.error = f"失败阶段：{failed_stage}。详细信息：{details}"
     elif "Analyzing product with Qwen model" in line:
         job.update(progress=8, stage="视觉模型正在识别商品类别与特征")
-    elif "Reusing Qwen analysis" in line:
+    elif "Reusing Qwen analysis" in line or "Reusing cached Qwen analysis" in line:
         job.update(progress=18, stage="已读取商品规格信息")
     elif line == "::workflow::spec_ready":
         job.set_step("analysis", "success")

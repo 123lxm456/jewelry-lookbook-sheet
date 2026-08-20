@@ -1,0 +1,4 @@
+Deterministic mirror composition contract. Do not send this stage to an image-generation model.
+The source plate contains exactly one real, left-facing side-profile model in the right fixed zone and an empty left zone.
+Copy the right zone, reverse it horizontally, apply only a restrained mirror-glass color response, and place it at identical scale and vertical position in the left mirror zone.
+The pixel transform must preserve model identity, pose, head angle, arms, hands, fingers, clothing, product structure, quantity, and wearing position. Add only the mirror frame; do not synthesize, redraw, inpaint, remove, or relocate content.

@@ -16,6 +16,11 @@ FORCE_MIRROR=0
 FORCE_ALL=0
 FORCE_ANALYSIS=0
 WORKFLOW_STAGE="启动生成流程"
+WORKFLOW_STARTED_SECONDS=$SECONDS
+QWEN_ANALYSIS_SECONDS=0
+IMAGE_GENERATION_SECONDS=0
+SERIES_QUALITY_SECONDS=0
+LONG_IMAGE_SECONDS=0
 DETAIL_OVERRIDE=""
 STYLE_OVERRIDE=""
 OUTPUT_OVERRIDE=""
@@ -65,6 +70,20 @@ workflow_fail_at() {
   workflow_fail "${2:-1}"
 }
 
+cleanup_completed_artifacts() {
+  # These inputs are checkpoints only while a job is incomplete.  A completed
+  # job can be served, downloaded, and inspected from its six final images,
+  # product specification, display plan, and job-state.json.  Keeping them
+  # used to retain multiple copies of the style image plus retry prompts,
+  # masks, quality reports and request logs for every successful job. Keep
+  # prompts: they are the exact model inputs for this job and make a later
+  # one-panel repair/audit independent from subsequently edited templates.
+  rm -rf "$OUTPUT_DIR/work" "$OUTPUT_DIR/logs"
+  rm -f "$OUTPUT_DIR/page.json" "$OUTPUT_DIR/completed-manifest.json" \
+    "$OUTPUT_DIR/product-long-layout.json" \
+    "$OUTPUT_DIR/jewelry-long.png" "$OUTPUT_DIR/jewelry-long-layout.json"
+}
+
 valid_image() {
   "$PYTHON_BIN" -c '
 import sys
@@ -89,10 +108,15 @@ ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env}"
 # still be selected explicitly through IMAGE_GEN_CLI.
 IMAGE_GEN="${IMAGE_GEN_CLI:-$ROOT_DIR/scripts/image_gen_api.py}"
 POSTPROCESS_QUALITY_CHECK="${POSTPROCESS_QUALITY_CLI:-$ROOT_DIR/scripts/assess_postprocess_quality.py}"
+SERIES_QUALITY_CHECK="${SERIES_QUALITY_CLI:-$ROOT_DIR/scripts/assess_series_quality.py}"
 MAX_ATTEMPTS="${IMAGE2_MAX_ATTEMPTS:-4}"
 RETRY_DELAY="${IMAGE2_RETRY_DELAY:-60}"
+ANALYSIS_MAX_ATTEMPTS="${QWEN_ANALYSIS_ATTEMPTS:-2}"
+ANALYSIS_RETRY_DELAY="${QWEN_ANALYSIS_RETRY_DELAY:-5}"
 PARALLELISM="${IMAGE2_PARALLELISM:-5}"
 [[ "$PARALLELISM" =~ ^[1-5]$ ]] || { echo "IMAGE2_PARALLELISM must be between 1 and 5" >&2; exit 2; }
+[[ "$ANALYSIS_MAX_ATTEMPTS" =~ ^[1-8]$ ]] || { echo "QWEN_ANALYSIS_ATTEMPTS must be between 1 and 8" >&2; exit 2; }
+[[ "$ANALYSIS_RETRY_DELAY" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "QWEN_ANALYSIS_RETRY_DELAY must be non-negative" >&2; exit 2; }
 
 load_env_key() {
   local wanted="$1" key value
@@ -175,8 +199,9 @@ workflow_stage "图片输入与预处理"
 # so resize, crop and format conversion overlap the Qwen Vision request.
 STYLE_CROP="$OUTPUT_DIR/work/style-reference.jpg"
 STYLE_PANELS_DIR="$OUTPUT_DIR/work/style-panels"
+STYLE_SAFE_PANELS_DIR="$OUTPUT_DIR/work/style-panels-deidentified"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/prepare_style_reference.py" "$STYLE" "$STYLE_CROP" \
-  --panels-dir "$STYLE_PANELS_DIR" &
+  --panels-dir "$STYLE_PANELS_DIR" --deidentified-panels-dir "$STYLE_SAFE_PANELS_DIR" &
 preprocess_pid=$!
 PRODUCT_SPEC="$OUTPUT_DIR/product-spec.json"
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -188,18 +213,36 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   fi
 else
   workflow_stage "商品信息分析"
+  analysis_started_seconds=$SECONDS
   analysis_command=("$PYTHON_BIN" "$ROOT_DIR/scripts/analyze_product.py"
     "$OVERALL" "$PRODUCT_SPEC" --env-file "$ENV_FILE")
   if [[ "$FORCE_ANALYSIS" -eq 1 ]]; then
     analysis_command+=(--force)
   fi
-  set +e
-  "${analysis_command[@]}" 2>&1 | tee "$OUTPUT_DIR/logs/analysis.log"
-  analysis_status="${PIPESTATUS[0]}"
-  set -e
+  analysis_status=1
+  for analysis_attempt in $(seq 1 "$ANALYSIS_MAX_ATTEMPTS"); do
+    set +e
+    if [[ "$analysis_attempt" -eq 1 ]]; then
+      "${analysis_command[@]}" 2>&1 | tee "$OUTPUT_DIR/logs/analysis.log"
+    else
+      echo "Retrying Qwen product analysis (${analysis_attempt}/${ANALYSIS_MAX_ATTEMPTS})..." >&2
+      "${analysis_command[@]}" 2>&1 | tee -a "$OUTPUT_DIR/logs/analysis.log"
+    fi
+    analysis_status="${PIPESTATUS[0]}"
+    set -e
+    [[ "$analysis_status" -eq 0 ]] && break
+    # Only retry transient provider/network failures. Configuration, schema,
+    # and unsupported-product errors are deterministic and should fail fast.
+    if ! grep -Eiq 'timeout|timed out|connection error|connecterror|apiconnectionerror|ratelimit|too many requests|error code: (408|409|429|500|502|503|504)' "$OUTPUT_DIR/logs/analysis.log"; then
+      break
+    fi
+    [[ "$analysis_attempt" -lt "$ANALYSIS_MAX_ATTEMPTS" ]] && sleep "$ANALYSIS_RETRY_DELAY"
+  done
+  QWEN_ANALYSIS_SECONDS=$((SECONDS - analysis_started_seconds))
   [[ "$analysis_status" -eq 0 ]] || workflow_fail "$analysis_status"
 fi
 echo "::workflow::spec_ready"
+CATEGORY_GROUP="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["identity"]["category_group"])' "$PRODUCT_SPEC")"
 "$PYTHON_BIN" -c '
 import json, sys
 from pathlib import Path
@@ -212,13 +255,19 @@ print("::workflow::product::" + json.dumps({
 }, ensure_ascii=False))
 ' "$PRODUCT_SPEC"
 
+# A product-only authority crop prevents coins, rulers, props, packaging, or
+# nearby coordinated products from competing with the actual sale item.
+PRODUCT_REFERENCE="$OUTPUT_DIR/work/product-authority-reference.png"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/prepare_product_reference.py" \
+  "$OVERALL" "$PRODUCT_SPEC" "$PRODUCT_REFERENCE"
+
 workflow_stage "商品文案与展示提示词生成"
 PREVIOUS_RUN_FINGERPRINT=""
 if [[ -s "$OUTPUT_DIR/generation-manifest.json" ]]; then
   PREVIOUS_RUN_FINGERPRINT="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("fingerprint", ""))' "$OUTPUT_DIR/generation-manifest.json")"
 fi
 RUN_FINGERPRINT="$("$PYTHON_BIN" "$ROOT_DIR/scripts/render_product_assets.py" \
-  "$PRODUCT_SPEC" "$DETAIL" "$STYLE" "$OUTPUT_DIR")"
+  "$PRODUCT_SPEC" "$PRODUCT_REFERENCE" "$STYLE" "$OUTPUT_DIR")"
 echo "::workflow::assets_ready"
 # Copywriting uses only the completed analysis and strategy. It deliberately
 # runs beside all image requests and is joined only before final composition.
@@ -230,8 +279,12 @@ data = json.load(open(sys.argv[1], encoding="utf-8"))
 sections = data.get("copy", data.get("marketing_copy", {})).get("sections", [])
 raise SystemExit(0 if any("商品视觉信息正在生成" in str(item.get("body", "")) for item in sections) else 1)
 ' "$PRODUCT_SPEC"; then
-    "$PYTHON_BIN" "$ROOT_DIR/scripts/generate_marketing_copy.py" \
-      "$PRODUCT_SPEC" "$OUTPUT_DIR/page.json" --env-file "$ENV_FILE" &
+    (set +e
+      "$PYTHON_BIN" "$ROOT_DIR/scripts/generate_marketing_copy.py" \
+        "$PRODUCT_SPEC" "$OUTPUT_DIR/page.json" --env-file "$ENV_FILE" \
+        2>&1 | tee "$OUTPUT_DIR/logs/copy.log"
+      exit "${PIPESTATUS[0]}"
+    ) &
     copy_pid=$!
   else
     rm -f "${PRODUCT_SPEC%.json}.copy-pending"
@@ -270,23 +323,34 @@ if [[ "$DRY_RUN" -eq 0 && "$MIRROR_ONLY" -eq 0 && "$FORCE_ALL" -eq 0 && \
 fi
 
 workflow_stage "图片输入与风格参考预处理"
-wait "$preprocess_pid" || { status=$?; workflow_fail "$status"; }
+wait "$preprocess_pid" || {
+  status=$?
+  workflow_fail_at "图片输入与风格参考预处理" "$status"
+}
 
 generate_panel() {
   local number="$1" panel_output="$2" prompt_file="$3" style_reference
   local attempt=1 attempt_log command_status
   local command=("$PYTHON_BIN" "$IMAGE_GEN" edit
     --model gpt-image-2
-    --image "$OVERALL"
+    --image "$PRODUCT_REFERENCE"
   )
-  # The Web workflow commonly uses the same upload as both overall and detail.
-  # Do not upload identical bytes twice in every image request.
-  if ! cmp -s "$OVERALL" "$DETAIL"; then
+  # The uncropped source supplies scale/context but is explicitly subordinate.
+  if ! cmp -s "$PRODUCT_REFERENCE" "$OVERALL"; then
+    command+=(--image "$OVERALL")
+  fi
+  if ! cmp -s "$OVERALL" "$DETAIL" && ! cmp -s "$PRODUCT_REFERENCE" "$DETAIL"; then
     command+=(--image "$DETAIL")
   fi
-  style_reference="$STYLE_PANELS_DIR/panel-$number.jpg"
-  [[ -s "$style_reference" ]] || style_reference="$STYLE_CROP"
-  command+=(--image "$style_reference" --prompt-file "$prompt_file"
+  # Style images often contain another product and can silently override the
+  # authority image. Textual per-panel art direction is the safe default.
+  # image1 is a jewelry-only visual grammar reference. The de-identified
+  # derivative retains pose/composition while suppressing copyable jewelry.
+  if [[ "$CATEGORY_GROUP" == "jewelry" && "${IMAGE2_INCLUDE_STYLE_REFERENCE:-true}" =~ ^(1|true|yes|on)$ ]]; then
+    style_reference="$STYLE_SAFE_PANELS_DIR/panel-$number.jpg"
+    if [[ -s "$style_reference" ]]; then command+=(--image "$style_reference"); fi
+  fi
+  command+=(--prompt-file "$prompt_file"
     --size 1024x1536
     --quality high
     --output-format png
@@ -321,6 +385,28 @@ generate_panel() {
     sleep "$RETRY_DELAY"
     attempt=$((attempt + 1))
   done
+}
+
+generate_product_lock() {
+  local number="$1" mask="$OUTPUT_DIR/work/panel-$1-product-lock-mask.png"
+  local source_panel="$OUTPUT_DIR/panel-$1.png"
+  local refined_panel="$OUTPUT_DIR/work/panel-$1-product-lock-refined.png"
+  local prompt_file="$OUTPUT_DIR/work/panel-$1-quality-retry.txt"
+  local log_file="$OUTPUT_DIR/logs/panel-$1-product-lock.log"
+  workflow_stage "商品身份局部锁定：第 ${number} 张"
+  local command=("$PYTHON_BIN" "$IMAGE_GEN" edit --model gpt-image-2
+    --image "$source_panel" --image "$PRODUCT_REFERENCE" --mask "$mask"
+    --prompt-file "$prompt_file" --size 1024x1536 --quality high
+    --output-format png --out "$refined_panel" --no-augment)
+  set +e
+  "${command[@]}" 2>&1 | tee "$log_file"
+  local status="${PIPESTATUS[0]}"
+  set -e
+  [[ "$status" -eq 0 ]] || return "$status"
+  valid_image "$refined_panel" || return 1
+  mv "$refined_panel" "$source_panel"
+  rm -f "$mask"
+  echo "::workflow::product_lock_ready::$number"
 }
 
 prepare_panel_layout() {
@@ -358,11 +444,23 @@ except Exception:
   fi
   workflow_stage "商品展示图片后处理：第 ${number} 张（${postprocess_type}）"
   postprocess_log="$OUTPUT_DIR/logs/panel-$number-${postprocess_type}.log"
+  if [[ "$postprocess_type" == "mirror_compose" ]]; then
+    refined_panel="$OUTPUT_DIR/work/panel-$number-${postprocess_type}-refined.png"
+    write_postprocess_marker "$marker" running
+    "$PYTHON_BIN" "$ROOT_DIR/scripts/compose_mirror_scene.py" "$source_panel" "$refined_panel" \
+      2>&1 | tee "$postprocess_log"
+    valid_image "$refined_panel" || return 1
+    write_postprocess_marker "$marker" complete
+    mv "$refined_panel" "$source_panel"
+    echo "::workflow::postprocess_ready::$number::$postprocess_type"
+    prepare_panel_layout "$number"
+    return 0
+  fi
   quality_status=3
   if [[ "${POSTPROCESS_QUALITY_GATE:-true}" =~ ^(1|true|yes|on)$ ]] && [[ -f "$POSTPROCESS_QUALITY_CHECK" ]] && \
      { [[ -z "${IMAGE_GEN_CLI:-}" ]] || [[ -n "${POSTPROCESS_QUALITY_CLI:-}" ]]; }; then
     set +e
-    "$PYTHON_BIN" "$POSTPROCESS_QUALITY_CHECK" --image "$source_panel" --product "$OVERALL" \
+    "$PYTHON_BIN" "$POSTPROCESS_QUALITY_CHECK" --image "$source_panel" --product "$PRODUCT_REFERENCE" \
       --type "$postprocess_type" --env-file "$ENV_FILE" \
       2>&1 | tee "$OUTPUT_DIR/logs/panel-$number-${postprocess_type}-quality.log"
     quality_status="${PIPESTATUS[0]}"
@@ -374,7 +472,7 @@ except Exception:
     prepare_panel_layout "$number"
     return 0
   fi
-  local postprocess_command=("$PYTHON_BIN" "$IMAGE_GEN" edit --model gpt-image-2 --image "$source_panel" --image "$OVERALL")
+  local postprocess_command=("$PYTHON_BIN" "$IMAGE_GEN" edit --model gpt-image-2 --image "$source_panel" --image "$PRODUCT_REFERENCE")
   if ! cmp -s "$OVERALL" "$DETAIL"; then
     postprocess_command+=(--image "$DETAIL")
   fi
@@ -476,6 +574,7 @@ wait_for_one_panel() {
   fi
 }
 
+image_generation_started_seconds=$SECONDS
 if [[ "$MIRROR_ONLY" -eq 1 && "${#POSTPROCESS_NUMBERS[@]}" -eq 0 ]]; then
   echo "The selected product strategy has no mirror/postprocess panel." >&2
   workflow_fail 2
@@ -514,19 +613,118 @@ done
 while [[ "${#generation_pids[@]}" -gt 0 ]]; do wait_for_one_panel; done
 for pid in "${postprocess_pids[@]}"; do wait "$pid" || { status=$?; workflow_fail "$status"; }; done
 for pid in "${layout_pids[@]}"; do wait "$pid" || { status=$?; workflow_fail "$status"; }; done
+IMAGE_GENERATION_SECONDS=$((SECONDS - image_generation_started_seconds))
 if [[ -n "$copy_pid" ]]; then wait "$copy_pid" || { status=$?; workflow_fail "$status"; }; fi
+
+if [[ "$DRY_RUN" -eq 0 && "${SERIES_QUALITY_GATE:-true}" =~ ^(1|true|yes|on)$ ]] && \
+   [[ -f "$SERIES_QUALITY_CHECK" ]] && \
+   { [[ -z "${IMAGE_GEN_CLI:-}" ]] || [[ -n "${SERIES_QUALITY_CLI:-}" ]]; }; then
+  semantic_attempt=1
+  semantic_max_attempts="${IMAGE2_SEMANTIC_MAX_ATTEMPTS:-2}"
+  [[ "$semantic_max_attempts" =~ ^[1-3]$ ]] || { echo "IMAGE2_SEMANTIC_MAX_ATTEMPTS must be between 1 and 3" >&2; workflow_fail 2; }
+  while true; do
+    workflow_stage "五图商品一致性与重复度校验：第 ${semantic_attempt} 次"
+    rm -f "$OUTPUT_DIR/work"/panel-??-product-lock-mask.png
+    quality_call_started_seconds=$SECONDS
+    # A status of 3 is a normal control signal meaning "regenerate the listed
+    # panels", not a workflow failure. Keep the pipeline in an if-condition so
+    # Bash does not dispatch the global ERR trap before we can inspect it.
+    if "$PYTHON_BIN" "$SERIES_QUALITY_CHECK" --output-dir "$OUTPUT_DIR" \
+      --product "$PRODUCT_REFERENCE" --spec "$PRODUCT_SPEC" --display-plan "$OUTPUT_DIR/display-plan.json" \
+      --attempt "$semantic_attempt" --env-file "$ENV_FILE" \
+      2>&1 | tee "$OUTPUT_DIR/logs/series-quality-attempt-$semantic_attempt.log"; then
+      quality_status=0
+    else
+      quality_pipeline_status=("${PIPESTATUS[@]}")
+      quality_status="${quality_pipeline_status[0]}"
+    fi
+    SERIES_QUALITY_SECONDS=$((SERIES_QUALITY_SECONDS + SECONDS - quality_call_started_seconds))
+    [[ "$quality_status" -eq 0 ]] && break
+    # The required product analysis and per-panel prompts remain authoritative;
+    # a best-effort series gate must not hold completed images indefinitely.
+    if [[ "$quality_status" -eq 2 ]]; then
+      echo "Series vision gate unavailable within its time budget; keeping prompt-constrained panels after local duplicate screening." >&2
+      echo "::workflow::quality_degraded::series-vision-unavailable"
+      break
+    fi
+    [[ "$quality_status" -eq 3 ]] || workflow_fail "$quality_status"
+    if [[ "$semantic_attempt" -ge "$semantic_max_attempts" ]]; then
+      echo "Generated series still fails product fidelity or diversity thresholds after $semantic_attempt assessment(s)." >&2
+      workflow_fail 3
+    fi
+    mapfile -t QUALITY_RETRY_PANELS < "$OUTPUT_DIR/work/series-quality.retry"
+    [[ "${#QUALITY_RETRY_PANELS[@]}" -gt 0 ]] || workflow_fail 3
+    for number in "${QUALITY_RETRY_PANELS[@]}"; do
+      [[ "$number" =~ ^0[1-5]$ ]] || workflow_fail 3
+      workflow_stage "质量校验自动重生成：第 ${number} 张"
+      clear_postprocess_marker "$number"
+      retry_generation_started_seconds=$SECONDS
+      if [[ -s "$OUTPUT_DIR/work/panel-$number-product-lock-mask.png" ]]; then
+        generate_product_lock "$number"
+      else
+        generate_panel "$number" "$OUTPUT_DIR/panel-$number.png" "$OUTPUT_DIR/work/panel-$number-quality-retry.txt"
+        if is_postprocess_number "$number"; then
+          generate_postprocess "$number"
+        fi
+      fi
+      IMAGE_GENERATION_SECONDS=$((IMAGE_GENERATION_SECONDS + SECONDS - retry_generation_started_seconds))
+    done
+    semantic_attempt=$((semantic_attempt + 1))
+  done
+fi
+
+# Quality retries may replace panels after speculative layout preparation.
+# Rebuild every cache entry from the accepted final pixels.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  for number in "${PANEL_NUMBERS[@]}"; do prepare_panel_layout "$number"; done
+fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
   workflow_stage "长图排版与合成（动态避让商品与人物）"
+  long_image_started_seconds=$SECONDS
   "$PYTHON_BIN" "$ROOT_DIR/scripts/assemble_long_image.py" \
     "$OUTPUT_DIR" "$OUTPUT_DIR/page.json" "$OUTPUT_DIR/product-long.png" \
     --display-plan "$OUTPUT_DIR/display-plan.json" --prepared-dir "$OUTPUT_DIR/work/layout-cache"
-  # Transitional aliases keep existing jewelry CLI/API integrations working.
-  cp "$OUTPUT_DIR/product-long.png" "$OUTPUT_DIR/jewelry-long.png"
-  cp "$OUTPUT_DIR/product-long-layout.json" "$OUTPUT_DIR/jewelry-long-layout.json"
-  cp "$OUTPUT_DIR/generation-manifest.json" "$COMPLETED_MANIFEST"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/package_product_images.py" "$OUTPUT_DIR"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/sync_job_state.py" "$OUTPUT_DIR"
+  LONG_IMAGE_SECONDS=$((SECONDS - long_image_started_seconds))
   rm -f "$OUTPUT_DIR/work/layout-cache"/panel-*.ppm "$OUTPUT_DIR/work/layout-cache"/risk-*.png
+  QWEN_RETRY_COUNT="$($PYTHON_BIN -c '
+import re, sys
+from pathlib import Path
+print(sum(len(re.findall(r"Qwen (?:request|model discovery) failed transiently", path.read_text(encoding="utf-8", errors="ignore"))) for path in Path(sys.argv[1]).glob("*.log")))
+' "$OUTPUT_DIR/logs")"
+  DUPLICATE_SECONDS="$($PYTHON_BIN -c '
+import json, sys
+from pathlib import Path
+total = 0.0
+for path in Path(sys.argv[1]).glob("series-quality-attempt-*.json"):
+    try:
+        total += float(json.loads(path.read_text(encoding="utf-8")).get("timing", {}).get("local_duplicate_seconds", 0))
+    except (OSError, ValueError):
+        pass
+print(f"{total:.3f}")
+' "$OUTPUT_DIR/work")"
+  TOTAL_SECONDS=$((SECONDS - WORKFLOW_STARTED_SECONDS))
+  "$PYTHON_BIN" -c '
+import json, sys
+from pathlib import Path
+labels = ("qwen_analysis_seconds", "qwen_retry_count", "series_consistency_seconds", "duplicate_check_seconds", "image_generation_seconds", "long_image_seconds", "total_seconds")
+values = [float(value) for value in sys.argv[2:]]
+data = dict(zip(labels, values))
+data["qwen_retry_count"] = int(data["qwen_retry_count"])
+path = Path(sys.argv[1])
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+' "$OUTPUT_DIR/logs/timing.json" "$QWEN_ANALYSIS_SECONDS" "$QWEN_RETRY_COUNT" "$SERIES_QUALITY_SECONDS" "$DUPLICATE_SECONDS" "$IMAGE_GENERATION_SECONDS" "$LONG_IMAGE_SECONDS" "$TOTAL_SECONDS"
+  echo "Qwen分析耗时：${QWEN_ANALYSIS_SECONDS}s"
+  echo "Qwen重试次数：${QWEN_RETRY_COUNT}"
+  echo "五图一致性检测耗时：${SERIES_QUALITY_SECONDS}s"
+  echo "重复度检测耗时：${DUPLICATE_SECONDS}s"
+  echo "图片生成耗时：${IMAGE_GENERATION_SECONDS}s"
+  echo "长图生成耗时：${LONG_IMAGE_SECONDS}s"
+  echo "总耗时：${TOTAL_SECONDS}s"
   workflow_stage "文件保存"
+  cleanup_completed_artifacts
   echo "生成成功：最终文件已保存到 $OUTPUT_DIR/product-long.png"
   echo "::workflow::complete"
 fi

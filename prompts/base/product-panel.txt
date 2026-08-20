@@ -1,19 +1,24 @@
 Use case: ads-marketing
 Asset type: vertical photorealistic commercial product panel
-Input hierarchy: Image 1 is the authoritative full product reference. Image 2 is an optional authoritative detail reference and may repeat Image 1. Image 3 is the panel-specific style, camera-angle, composition, and typography-layout reference only; borrow its visual grammar but never copy a product from it.
+Input hierarchy: Image 1 is a crop centered on the primary sale product and is the sole product-design authority. Image 2 is the uncropped source for scale and context only. A later image, when present, may be an additional detail reference. Never copy a product, prop, jewelry, logo, person, or accessory from any style reference.
+$style_reference_policy_en
+Panel-specific visual grammar: $panel_style_reference_en
 Product identity: $product_name; category $category / $subcategory. $subject_description_en
 Quantity/visibility rule: $quantity_visibility_en
 Material appearance: $material_appearance_en
 Observed structure and proportions: $structure
 Observed components: $components
 Distinctive details: $important_details_en
+Exact visual topology: $topology_signature_en
+Context objects that are NOT part of the sale product and must never appear as product components or coordinated accessories: $excluded_context_en
+Reference visibility limits: $visibility_limitations_en. Preserve every observed feature, but do not invent hidden or source-cropped structure. When the reference does not show a clasp, chain end, back, interior, underside, or other part, keep it outside the chosen view instead of designing it.
 Brand handling: $brand_elements_en. $brand_rule_en Never add, remove, replace, correct, restyle, duplicate, or relocate any brand element.
 Primary request: $scene_prompt_en
 Dynamic product-specific plan: $dynamic_display_guidance_en
 Diversity mandate (hard requirement): $diversity_directive_en
 Recurring model continuity: $model_identity_en
 Scene/backdrop: $backdrop_en
-Composition/framing: vertical 2:3. $composition_en FULL-PRODUCT FRAMING IS A HARD REQUIREMENT FOR ALL FIVE PANELS: the same complete core product and its entire silhouette must be comfortably inside the frame with breathing room on every side. No product edge or identity-defining component may touch or cross the image boundary. Use camera angle, height, placement, pose, scene, background, lighting, and styling—not a tighter crop—to create variety. Retain the strategy-defined quiet area for later typography.
+Composition/framing: vertical 2:3. $composition_en Show all product structure that is actually evidenced by the source. Keep every known outer edge and identity-defining component comfortably inside the frame, but never fabricate unseen structure merely to create a nominally complete object. Use camera angle, height, placement, pose, scene, background, lighting, and styling—not a tighter crop—to create variety. Retain the strategy-defined quiet area for later typography.
 Lighting/style: $lighting_en Photorealistic premium e-commerce and advertising photography, physically plausible scale and contact.
-Fidelity constraints: The input product is the sole product-design authority. $integrity_constraints_en Preserve silhouette, structure, proportions, placement, material appearance, color, texture, exact quantity, and every observed component and distinctive detail listed above.
-Avoid: $forbidden_changes_en; any close-up, macro crop, partial-product composition, clipped outer edge, hidden core structure, or product extending beyond the frame; a redesigned or substitute product; invented, missing, duplicated, simplified, symmetrized, recolored, or relocated components; invented accessories or coordinated products; a generic front three-quarter catalog view unless explicitly assigned; a repeated pose, hand action, head angle, gaze, framing, camera elevation, camera distance, lens feel, or product arrangement from another panel; text overlays, UI, watermark, or fantasy effects.
+Fidelity constraints: PIXEL-LEVEL PRODUCT IDENTITY OVERRIDES AESTHETICS. The input product is the sole product-design authority. $integrity_constraints_en Preserve the topology signature, silhouette, structure, proportions, attachment points, placement, material appearance, color, texture, exact quantity, and every observed component and distinctive detail listed above. Treat this as an identity-preserving edit, not a product redesign or text-to-image reinterpretation.
+Avoid: $forbidden_changes_en; $framing_avoid_en; a redesigned or substitute product; invented, missing, duplicated, simplified, symmetrized, recolored, or relocated components; invented accessories or coordinated products; a generic front three-quarter catalog view unless explicitly assigned; a repeated pose, hand action, head angle, gaze, framing, camera elevation, camera distance, lens feel, or product arrangement from another panel; text overlays, UI, watermark, or fantasy effects.

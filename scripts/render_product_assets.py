@@ -83,7 +83,7 @@ def main() -> None:
     write_json(args.output_dir / "page.json", page)
 
     fingerprint_input = {
-        "workflow_version": 7,
+        "workflow_version": 8,
         "schema_version": spec.schema_version,
         "strategy_id": spec.strategy_id,
         "display_plan_sha256": canonical_hash(display_plan),

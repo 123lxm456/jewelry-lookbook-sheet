@@ -3,14 +3,16 @@
   "panels": [
     {
       "id": "worn", "label": "佩戴展示", "copy_purpose": "自然佩戴场景，突出正确佩戴位置与商品本体",
-      "scene_prompt_en": "Show the exact product naturally and correctly worn by one adult model at its category-appropriate body location.",
-      "backdrop_en": "Warm refined ivory interior, understated clothing, minimal cream decor.",
-      "composition_en": "Use the minimum body crop needed for the correct wearing location; place the product-bearing subject on the right two-thirds and keep the left side calm.",
+      "style_reference_en": "Translate Image1 panel 1's elegant afternoon-tea interaction into the uploaded jewelry's correct wearing location: intimate lifestyle crop, graceful cup gesture, warm cream table setting, and soft window light. Preserve the product authority, never the reference jewelry.",
+      "scene_prompt_en": "Show the exact product naturally and correctly worn by one adult model seated at an elegant afternoon-tea table, with one hand naturally holding a teacup below face level so the jewelry remains unobstructed.",
+      "backdrop_en": "Warm refined ivory tearoom interior, understated cream clothing, one porcelain cup and sparse pale flowers kept away from the jewelry.",
+      "composition_en": "Use an upper-torso three-quarter portrait with the complete face naturally visible, the correct wearing location prominent, and a graceful live hand gesture; place the model on the right two-thirds and keep calm copy space at left.",
       "lighting_en": "Warm side-window light, natural skin, controlled highlights on metal, stones, and surface details.",
       "safe_zone": [0.0, 0.06, 0.48, 0.94], "crop_height": 1460, "focus_y": 0.42
     },
     {
       "id": "detail", "label": "结构全貌", "copy_purpose": "完整商品中突出可观察的结构、镶嵌、轮廓与表面细节",
+      "style_reference_en": "Translate Image1 panel 2's pale ivory high-angle technical editorial, airy botanical negative space, large product scale, crisp construction emphasis, and clean catalog light; omit its jewelry and inset graphics.",
       "scene_prompt_en": "Show the exact complete item in a detail-led product photograph, using camera angle and light to document its most distinctive construction and surface details without cropping any part.",
       "backdrop_en": "Pale warm marble with sparse translucent cream accents at the outer corners.",
       "composition_en": "Keep the complete item and its full outer silhouette inside frame with breathing room; make the defining feature pin-sharp in the upper-middle and keep the lower area quiet.",
@@ -19,6 +21,7 @@
     },
     {
       "id": "still_life", "label": "氛围静物", "copy_purpose": "暖调静物广告，突出商品质感和完整结构",
+      "style_reference_en": "Adapt Image1 panel 3's amber afternoon still life, book-and-glass depth layers, long directional shadows, diagonal visual rhythm, and nostalgic editorial warmth.",
       "scene_prompt_en": "Place the exact complete product in an intimate premium afternoon still life using an arrangement appropriate to its structure.",
       "backdrop_en": "Warm walnut surface, edge of an open vintage book, one clear stemmed glass; sparse and believable.",
       "composition_en": "Arrange the product clearly across the lower half and keep the upper-right clean.",
@@ -27,20 +30,22 @@
     },
     {
       "id": "gift", "label": "礼赠展示", "copy_purpose": "无品牌礼盒或合适支撑上的完整礼赠陈列",
-      "scene_prompt_en": "Present the exact product on a correctly scaled premium unbranded jewelry support or box appropriate to this item.",
-      "backdrop_en": "Flowing ivory satin and one champagne ribbon confined to the outer edge.",
-      "composition_en": "Show the full product without bending or obstruction and retain a clean upper-left margin.",
-      "lighting_en": "Soft luminous daylight, warm ivory bounce, realistic controlled highlights.",
+      "style_reference_en": "Translate Image1 panel 4's luminous gift presentation: an open unbranded jewelry box, ivory textile folds, restrained champagne ribbon, ceremonial premium mood, and generous editorial negative space. Preserve only this display grammar, never its jewelry.",
+      "scene_prompt_en": "Present the exact product in one correctly scaled open premium unbranded jewelry box appropriate to its category, with every source-evidenced component unobstructed.",
+      "backdrop_en": "Flowing ivory satin around an open matte-ivory box, with one restrained champagne ribbon confined to the far edge.",
+      "composition_en": "Use a high three-quarter gift-tableau view: box and complete product centered in the lower-right two-thirds, with a clean upper-left margin; remain visibly distinct from panel 2 through the open box, textile depth, and wider ceremonial framing.",
+      "lighting_en": "Soft luminous daylight with warm ivory bounce, controlled shadows, and realistic restrained highlights.",
       "safe_zone": [0.04, 0.04, 0.48, 0.46], "crop_height": 1500, "focus_y": 0.5
     },
     {
       "id": "mirror", "label": "镜面佩戴", "copy_purpose": "模特自然佩戴及物理一致的镜面生活方式展示",
-      "scene_prompt_en": "Create one complete photograph of the exact product correctly worn by one adult model standing before a real vertical mirror, with one faithful natural reflection in the same coherent scene.",
-      "backdrop_en": "Refined warm ivory dressing interior with a real champagne-framed mirror.",
-      "composition_en": "Keep model, reflection, mirror plane, visible limbs, and product comfortably in frame; reserve a quiet lower clothing or side area.",
+      "style_reference_en": "Translate Image1 panel 5's warm dressing-room mirror portrait: elegant side profile, complete natural face, calm hand at collarbone, narrow champagne mirror divider, and intimate medium-wide editorial mood. Reflection geometry is completed deterministically.",
+      "scene_prompt_en": "Create a source plate for deterministic mirror composition: exactly one adult model correctly wearing the exact product, in left-facing side profile, and no reflection or second person.",
+      "backdrop_en": "Refined warm ivory dressing interior. Keep the left half empty and visually continuous for deterministic reflection insertion; place the sole real model entirely in the right half.",
+      "composition_en": "Use two vertical zones separated by a broad calm center aisle. In the right zone show the complete head, face, neck, shoulders, upper torso, and visible hand of one left-facing side-profile model. Keep the tip of the nose to the right of 60% image width and the hand below the chin at the collarbone, never covering face or jewelry. Do not draw a mirror, frame, reflection, or second person; the workflow adds one physically exact reflection.",
       "lighting_en": "Warm side-window light with believable reflection, perspective, and falloff.",
       "safe_zone": [0.52, 0.68, 0.96, 0.94], "crop_height": 1560, "focus_y": 0.42,
-      "postprocess": {"type": "mirror_refine", "template": "prompts/postprocess/mirror-refine.txt"}
+      "postprocess": {"type": "mirror_compose", "template": "prompts/postprocess/mirror-compose.txt"}
     }
   ]
 }

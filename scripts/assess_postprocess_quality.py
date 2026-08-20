@@ -27,7 +27,8 @@ SYSTEM_PROMPT = """You are a strict commercial image quality inspector. Return J
 Assess whether the generated mirror photograph is already good enough to publish without another image edit.
 It qualifies only when there is one coherent real mirror scene, one person and exactly one corresponding reflection,
 matching pose/clothing/anatomy/perspective on both sides, and the same referenced jewelry is visibly and correctly
-worn without duplication, disappearance, redesign, or malformed body parts. Minor stylistic differences are acceptable.
+worn without duplication, disappearance, redesign, or malformed body parts. Objects outside the primary product crop are
+context, not required product components. Minor color shifts caused by mirror glass are acceptable.
 Return qualified, confidence from 0 to 1, and concise issues. When evidence is ambiguous, qualified must be false."""
 
 
@@ -38,7 +39,7 @@ def main() -> int:
     parser.add_argument("--type", required=True)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
     args = parser.parse_args()
-    if args.type != "mirror_refine":
+    if args.type not in {"mirror_refine", "mirror_compose"}:
         print(f"No quality gate is defined for {args.type}; refinement required.")
         return 3
 
@@ -50,7 +51,10 @@ def main() -> int:
         return 2
 
     try:
-        client = QwenVisionClient(api_key, base_url, os.environ.get("QWEN_MODEL", "").strip() or None)
+        client = QwenVisionClient(
+            api_key, base_url, os.environ.get("QWEN_MODEL", "").strip() or None,
+            timeout=float(os.environ.get("QWEN_POSTPROCESS_TIMEOUT_SECONDS", "45")),
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [

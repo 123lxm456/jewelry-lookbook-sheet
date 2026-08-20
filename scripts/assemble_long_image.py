@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps, ImageStat
 
 WIDTH = 1256
 TITLE_HEIGHT = 0
@@ -65,6 +65,19 @@ def cover(path: Path, width: int, height: int, focus_y: float = 0.5) -> Image.Im
     left = max(0, (resized.width - width) // 2)
     top = max(0, round((resized.height - height) * focus_y))
     return resized.crop((left, top, left + width, top + height))
+
+
+def contain(path: Path, width: int, height: int) -> Image.Image:
+    """Fit the complete generated panel without discarding product pixels."""
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+    background = ImageOps.fit(image, (width, height), method=Image.Resampling.LANCZOS)
+    background = background.filter(ImageFilter.GaussianBlur(max(8, round(width * 0.018))))
+    scale = min(width / image.width, height / image.height)
+    foreground = image.resize((round(image.width * scale), round(image.height * scale)), Image.Resampling.LANCZOS)
+    left, top = (width - foreground.width) // 2, (height - foreground.height) // 2
+    background.paste(foreground, (left, top))
+    return background
 
 
 def build_risk_map(image: Image.Image) -> Image.Image:
@@ -446,7 +459,7 @@ def main() -> None:
             with Image.open(risk_path) as opened:
                 risk_maps.append(opened.convert("L"))
     else:
-        images = [cover(path, WIDTH, height, focus_y) for path, height, focus_y in panel_specs]
+        images = [contain(path, WIDTH, height) for path, height, _focus_y in panel_specs]
         risk_maps = None
     rng = random.Random(args.seed) if args.seed is not None else random.SystemRandom()
     choices = choose_layouts(images, rng, [panel["safe_zone"] for panel in panels], risk_maps)

@@ -92,10 +92,14 @@ class DynamicDisplayPlan(StrictModel):
             "camera_azimuth", "camera_elevation", "shot_distance", "composition",
             "product_position", "scene_type",
         )
-        for field_name in dimensions:
-            values = [getattr(concept, field_name) for concept in self.concepts]
-            if len(set(values)) != len(values):
-                raise ValueError(f"all five display concepts require distinct {field_name} values")
+        for left in range(len(self.concepts)):
+            for right in range(left + 1, len(self.concepts)):
+                differences = sum(
+                    getattr(self.concepts[left], field_name) != getattr(self.concepts[right], field_name)
+                    for field_name in dimensions
+                )
+                if differences < 4:
+                    raise ValueError(f"display concepts {left + 1} and {right + 1} differ in fewer than four visual dimensions")
         return self
 
 
@@ -108,6 +112,29 @@ class IntegritySpec(StrictModel):
     must_preserve: list[str] = Field(min_length=2, max_length=20)
     must_not_invent: list[str] = Field(min_length=2, max_length=20)
     uncertain_attributes: list[str] = Field(default_factory=list, max_length=12)
+
+
+class ReferenceObservation(StrictModel):
+    """Separates the primary product from props and records what is unknowable.
+
+    Coordinates are normalized [left, top, right, bottom] values in the source
+    image.  The default keeps historical 2.0 specifications readable; newly
+    analyzed products always receive explicit evidence.
+    """
+
+    primary_product_bbox: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    primary_product_elements: list[str] = Field(default_factory=list, max_length=30)
+    excluded_context_elements: list[str] = Field(default_factory=list, max_length=20)
+    visibility_limitations: list[str] = Field(default_factory=list, max_length=20)
+    topology_signature_en: str = Field(default="Use the source pixels as the product authority.", min_length=8, max_length=1200)
+
+    @field_validator("primary_product_bbox")
+    @classmethod
+    def bbox_must_be_normalized(cls, value: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        left, top, right, bottom = value
+        if not all(0 <= coordinate <= 1 for coordinate in value) or left >= right or top >= bottom:
+            raise ValueError("primary_product_bbox must be normalized [left, top, right, bottom]")
+        return value
 
 
 class PromptFacts(StrictModel):
@@ -162,6 +189,7 @@ class ProductAnalysis(StrictModel):
     dynamic_display_plan: DynamicDisplayPlan | None = None
     design: DesignSpec
     integrity: IntegritySpec
+    reference_observation: ReferenceObservation = Field(default_factory=ReferenceObservation)
     prompt_facts: PromptFacts
 
 
@@ -169,6 +197,7 @@ class SourceMetadata(StrictModel):
     image_file: str = Field(min_length=1)
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     vision_model: str = Field(min_length=1)
+    analysis_revision: str = Field(default="legacy", min_length=1, max_length=80)
     analyzed_at: datetime
 
 

@@ -51,6 +51,20 @@ def jpeg_bytes() -> bytes:
 
 
 class QueueRecoveryTests(unittest.TestCase):
+    def test_series_quality_timeout_is_not_reported_as_product_analysis_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "input.jpg"
+            input_path.write_bytes(jpeg_bytes())
+            job = JobState(
+                "a" * 32, 1, root, input_path, status="failed",
+                stage="五图商品一致性与重复度校验：第 1 次",
+            )
+            job.steps = {"analysis": {"status": "success"}}
+            message = job_failure_error(job, RuntimeError("APITimeoutError: Request timed out"))
+            self.assertIn("五图质量校验", message)
+            self.assertNotIn("商品分析服务", message)
+
     def test_fair_queue_prioritizes_users_with_less_running_work(self) -> None:
         queue = FairJobQueue()
         root = Path(tempfile.gettempdir())
@@ -521,6 +535,38 @@ class WebAppTests(unittest.TestCase):
             error = job_failure_error(job, RuntimeError("generic workflow exit"))
             self.assertIn("请求过于频繁", error)
             self.assertNotIn("generic workflow exit", error)
+
+    def test_generic_shell_stage_error_does_not_hide_analysis_diagnosis(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "logs").mkdir()
+            input_path = root / "input.jpg"
+            input_path.write_bytes(jpeg_bytes())
+            job = JobState("e" * 32, 1, root, input_path)
+            job.set_step("analysis", "failed", error="failed")
+            job.error = "失败阶段：商品信息分析。详细信息：stage=商品信息分析::status=1"
+            (root / "logs/analysis.log").write_text(
+                "openai.APIConnectionError: Connection error.", encoding="utf-8"
+            )
+            error = job_failure_error(job, RuntimeError("generic workflow exit"))
+            self.assertIn("商品分析服务连接失败", error)
+            self.assertNotIn("status=1", error)
+
+    def test_permission_error_is_not_misreported_as_stale_analysis_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "logs").mkdir()
+            input_path = root / "input.jpg"
+            input_path.write_bytes(jpeg_bytes())
+            job = JobState("p" * 32, 1, root, input_path)
+            job.set_step("analysis", "failed", error="failed")
+            (root / "logs/analysis.log").write_text(
+                "APITimeoutError: Request timed out\nPermissionError: [Errno 13] Permission denied",
+                encoding="utf-8",
+            )
+            error = job_failure_error(job, RuntimeError("generic workflow exit"))
+            self.assertIn("输出目录不可写", error)
+            self.assertNotIn("商品分析服务请求超时", error)
 
     def test_unsupported_apparel_error_is_user_facing(self) -> None:
         error = public_job_error(RuntimeError(

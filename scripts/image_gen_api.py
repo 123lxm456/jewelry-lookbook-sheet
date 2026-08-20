@@ -79,6 +79,7 @@ def parse_args() -> argparse.Namespace:
     edit = subparsers.add_parser("edit", help="Edit one or more reference images")
     edit.add_argument("--model", default="gpt-image-2")
     edit.add_argument("--image", action="append", required=True)
+    edit.add_argument("--mask", help="Optional RGBA edit mask; transparent pixels are editable")
     edit.add_argument("--prompt-file", required=True)
     edit.add_argument("--size", default="1024x1536")
     edit.add_argument("--quality", default="high")
@@ -127,6 +128,13 @@ def run_edit(args: argparse.Namespace) -> None:
             request["image"].append(handle)
         if len(request["image"]) == 1:
             request["image"] = request["image"][0]
+        if args.mask:
+            mask_path = Path(args.mask)
+            if not mask_path.is_file():
+                fail(f"Mask file not found: {mask_path}")
+            mask_handle = mask_path.open("rb")
+            handles.append(mask_handle)
+            request["mask"] = mask_handle
         with global_image_slot():
             result = OpenAI().images.edit(**request)
     except Exception as exc:

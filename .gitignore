@@ -34,6 +34,10 @@ outputs/
 output/
 var/
 tmp/
+work/
+logs/
+.analysis-cache/
+*.zip
 *.log
 *.pid
 *.sqlite
@@ -42,3 +46,13 @@ tmp/
 # Temporary files created by atomic writes
 *.tmp
 *.part
+uploads/
+user_uploads/
+*.db
+*.7z
+*.rar
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors

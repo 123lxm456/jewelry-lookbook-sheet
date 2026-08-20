@@ -2,7 +2,16 @@
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageFilter, ImageStat
+
+
+def deidentify_style_product(image: Image.Image) -> Image.Image:
+    """Retain pose/layout/color grammar while making jewelry detail non-copyable."""
+    small_width = max(48, image.width // 16)
+    small_height = max(72, image.height // 16)
+    abstract = image.resize((small_width, small_height), Image.Resampling.BOX)
+    abstract = abstract.resize(image.size, Image.Resampling.BILINEAR)
+    return abstract.filter(ImageFilter.GaussianBlur(max(2, image.width / 320)))
 
 
 def near_white_runs(image: Image.Image) -> list[tuple[int, int]]:
@@ -78,6 +87,7 @@ def main() -> None:
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--panels-dir", type=Path)
+    parser.add_argument("--deidentified-panels-dir", type=Path)
     args = parser.parse_args()
 
     with Image.open(args.source) as image:
@@ -95,7 +105,13 @@ def main() -> None:
                     panel = image.crop((0, panel_top, width, panel_bottom)).convert("RGB")
                     panel_path = args.panels_dir / f"panel-{index:02d}.jpg"
                     panel.save(panel_path, quality=94, subsampling=0)
+                    if args.deidentified_panels_dir:
+                        args.deidentified_panels_dir.mkdir(parents=True, exist_ok=True)
+                        safe_path = args.deidentified_panels_dir / f"panel-{index:02d}.jpg"
+                        deidentify_style_product(panel).save(safe_path, quality=90, subsampling=0)
                 print(f"Saved {len(regions)} panel-specific style references: {args.panels_dir}")
+                if args.deidentified_panels_dir:
+                    print(f"Saved product-deidentified style references: {args.deidentified_panels_dir}")
 
 
 if __name__ == "__main__":
